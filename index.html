@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>WS Camera Stream Test</title>
+  <style>
+    body { font-family: sans-serif; }
+    img { width: 800px; max-width: 100%; border: 1px solid #ccc; }
+    button { margin-right: 8px; }
+  </style>
+</head>
+<body>
+  <h3>WebSocket stream</h3>
+  <p id="status">status: ...</p>
+
+  <button id="btn">recognize_now</button>
+  <img id="frame" alt="stream frame" />
+
+  <pre id="log"></pre>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const imgEl = document.getElementById("frame");
+    const logEl = document.getElementById("log");
+    const btn = document.getElementById("btn");
+
+    const ws = new WebSocket("ws://localhost:8000/ws/stream");
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = () => statusEl.textContent = "status: connected";
+    ws.onclose = () => statusEl.textContent = "status: closed";
+    ws.onerror = (e) => statusEl.textContent = "status: error (see console)";
+
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === "string") {
+        logEl.textContent = ev.data + "\n" + logEl.textContent;
+        return;
+      }
+      const blob = new Blob([ev.data], { type: "image/jpeg" });
+      const url = URL.createObjectURL(blob);
+      imgEl.src = url;
+      imgEl.onload = () => URL.revokeObjectURL(url);
+    };
+
+    btn.onclick = () => {
+      ws.send(JSON.stringify({ type: "recognize_now" }));
+    };
+  </script>
+</body>
+</html>
