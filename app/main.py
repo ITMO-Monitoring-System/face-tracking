@@ -4,7 +4,10 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from .camera import CameraWorker
 from .config import settings
@@ -14,14 +17,34 @@ from .rabbitmq import FacePublisher
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 detector = FaceDetector(settings.face_cascade_path)
 camera = CameraWorker(settings.camera_id, detector)
 publisher = FacePublisher(
     settings.rabbitmq_url,
     settings.exchange_name,
-    settings.queue_name,
-    settings.routing_key,
+    lecture_queue_template=settings.lecture_queue_template,
+    lecture_routing_key_template=settings.lecture_routing_key_template,
 )
+
+
+class LectureStartRequest(BaseModel):
+    durable: bool = True
+    auto_delete: bool = False
+    expires_ms: int | None = None
+    message_ttl_ms: int | None = None
+
+
+class LectureEndRequest(BaseModel):
+    if_unused: bool = False
+    if_empty: bool = False
 
 
 @app.on_event("startup")
@@ -35,19 +58,61 @@ async def shutdown() -> None:
     camera.stop()
     await publisher.close()
 
+@app.get("/")
+async def root():
+    return FileResponse("index.html")
 
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True}
 
 
-async def publish_current_faces() -> dict:
+# ---- Lecture control API ----
+
+@app.get("/api/lectures")
+async def list_lectures() -> dict:
+    return {"active": publisher.active_lectures()}
+
+
+@app.post("/api/lectures/{lecture_id}/start")
+async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None) -> dict:
+    req = req or LectureStartRequest()
+    binding = await publisher.start_lecture(
+        lecture_id,
+        durable=req.durable,
+        auto_delete=req.auto_delete,
+        expires_ms=req.expires_ms,
+        message_ttl_ms=req.message_ttl_ms,
+    )
+    return {
+        "ok": True,
+        "lecture_id": lecture_id,
+        "queue": binding.queue_name,
+        "routing_key": binding.routing_key,
+    }
+
+
+@app.post("/api/lectures/{lecture_id}/end")
+async def end_lecture(lecture_id: str, req: LectureEndRequest | None = None) -> dict:
+    req = req or LectureEndRequest()
+    deleted = await publisher.end_lecture(
+        lecture_id,
+        if_unused=req.if_unused,
+        if_empty=req.if_empty,
+    )
+    return {"ok": True, "lecture_id": lecture_id, "deleted": deleted}
+
+
+# ---- Face publish ----
+
+async def publish_current_faces(lecture_id: str) -> dict:
     frame, faces, ts = camera.snapshot()
     if frame is None:
         return {"published": 0, "error": "no_frame_yet"}
 
     crops = detector.crop_faces(frame, faces)
     published = 0
+
     for idx, (bbox, crop) in enumerate(crops):
         jpeg = camera.encode_jpeg(crop, settings.jpeg_quality)
         headers = {
@@ -56,15 +121,30 @@ async def publish_current_faces() -> dict:
             "idx": idx,
             "bbox": [bbox.x, bbox.y, bbox.w, bbox.h],
         }
-        await publisher.publish_face_jpeg(jpeg, headers=headers)
+        await publisher.publish_face_jpeg(lecture_id, jpeg, headers=headers)
         published += 1
 
-    return {"published": published, "faces": len(faces), "ts": ts}
+    return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id}
 
+
+# ---- WebSocket stream ----
+# фронт подключается так:
+#   ws://host/ws/stream?lecture_id=<ID>
 
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket) -> None:
+    lecture_id = ws.query_params.get("lecture_id")
     await ws.accept()
+
+    if not lecture_id:
+        await ws.send_text(json.dumps({"type": "error", "error": "lecture_id_required"}))
+        await ws.close(code=1008)
+        return
+
+    if not publisher.is_lecture_active(lecture_id):
+        await ws.send_text(json.dumps({"type": "error", "error": "lecture_not_started", "lecture_id": lecture_id}))
+        await ws.close(code=1008)
+        return
 
     send_interval = 1.0 / max(1, settings.fps)
 
@@ -89,8 +169,11 @@ async def ws_stream(ws: WebSocket) -> None:
                 continue
 
             if payload.get("type") == "recognize_now":
-                result = await publish_current_faces()
-                await ws.send_text(json.dumps({"type": "recognize_result", "data": result}))
+                try:
+                    result = await publish_current_faces(lecture_id)
+                    await ws.send_text(json.dumps({"type": "recognize_result", "data": result}))
+                except Exception as e:
+                    await ws.send_text(json.dumps({"type": "error", "error": str(e), "lecture_id": lecture_id}))
 
     task_s = asyncio.create_task(sender())
     task_r = asyncio.create_task(receiver())
@@ -105,4 +188,4 @@ async def ws_stream(ws: WebSocket) -> None:
 
 def run() -> None:
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)

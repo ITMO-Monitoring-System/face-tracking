@@ -1,5 +1,6 @@
 import os
 
+
 class Settings:
     # Camera
     camera_id: int = int(os.getenv("CAMERA_ID", "0"))
@@ -12,10 +13,19 @@ class Settings:
         "haarcascades/Haarcascade Frontal Face.xml",
     )
 
-    # RabbitMQ (rabbitmq1)
+    # RabbitMQ
     rabbitmq_url: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5673/")
     exchange_name: str = os.getenv("RABBITMQ_EXCHANGE", "faces")
-    routing_key: str = os.getenv("RABBITMQ_ROUTING_KEY", "face")
-    queue_name: str = os.getenv("RABBITMQ_QUEUE", "faces.queue")
+
+    # Per-lecture routing
+    lecture_queue_template: str = os.getenv(
+        "RABBITMQ_LECTURE_QUEUE_TEMPLATE",
+        "faces.queue.lecture.{lecture_id}",
+    )
+    lecture_routing_key_template: str = os.getenv(
+        "RABBITMQ_LECTURE_ROUTING_KEY_TEMPLATE",
+        "lecture.{lecture_id}.face",
+    )
+
 
 settings = Settings()

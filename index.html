@@ -1,49 +1,288 @@
 <!doctype html>
-<html>
+<html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <title>WS Camera Stream Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lecture WS Stream + RMQ</title>
   <style>
-    body { font-family: sans-serif; }
-    img { width: 800px; max-width: 100%; border: 1px solid #ccc; }
-    button { margin-right: 8px; }
+    :root { color-scheme: dark; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .card { border: 1px solid #333; border-radius: 12px; padding: 12px; background: #0f0f10; }
+    label { font-size: 12px; opacity: 0.9; display:block; margin-bottom: 6px; }
+    input { padding: 10px 12px; border-radius: 10px; border: 1px solid #333; background: #111; color: #fff; min-width: 260px; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #333; background: #171717; color: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .muted { opacity: 0.8; font-size: 12px; }
+    .status { font-weight: 600; }
+    img { width: 980px; max-width: 100%; border-radius: 12px; border: 1px solid #333; background:#0b0b0c; }
+    pre { white-space: pre-wrap; word-break: break-word; background:#0b0b0c; border:1px solid #333; border-radius: 12px; padding: 12px; max-height: 280px; overflow:auto; }
+    .pill { display:inline-block; padding: 4px 8px; border:1px solid #333; border-radius: 999px; font-size: 12px; opacity: .9; }
   </style>
 </head>
 <body>
-  <h3>WebSocket stream</h3>
-  <p id="status">status: ...</p>
+  <h2>Lecture stream (WS) + publish faces to RMQ</h2>
 
-  <button id="btn">recognize_now</button>
-  <img id="frame" alt="stream frame" />
+  <div class="row">
+    <div class="card" style="flex: 1; min-width: 340px;">
+      <label for="baseUrl">Backend base URL</label>
+      <input id="baseUrl" placeholder="http://localhost:8000" />
+      <div class="muted" style="margin-top: 8px;">
+        Если открываешь файл напрямую (file://), лучше оставить <span class="pill">http://localhost:8000</span>.
+      </div>
+    </div>
 
-  <pre id="log"></pre>
+    <div class="card" style="flex: 1; min-width: 340px;">
+      <label for="lectureId">Lecture ID</label>
+      <input id="lectureId" placeholder="например: 123" />
+      <div class="muted" style="margin-top: 8px;">
+        WS подключение будет: <span class="pill">/ws/stream?lecture_id=&lt;ID&gt;</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top: 12px;">
+    <button id="btnList">List active lectures</button>
+    <button id="btnStart">Start lecture (create queue)</button>
+    <button id="btnEnd">End lecture (delete queue)</button>
+    <span id="apiStatus" class="muted"></span>
+  </div>
+
+  <div class="row" style="margin-top: 12px;">
+    <button id="btnConnect">Connect WS</button>
+    <button id="btnDisconnect" disabled>Disconnect WS</button>
+    <button id="btnRecognize" disabled>Recognize now (publish faces)</button>
+    <span id="wsStatus" class="status">WS: disconnected</span>
+  </div>
+
+  <div class="row" style="margin-top: 12px;">
+    <div class="card" style="flex: 1; min-width: 340px;">
+      <div class="muted">Last lecture start info</div>
+      <pre id="startInfo">{}</pre>
+    </div>
+    <div class="card" style="flex: 1; min-width: 340px;">
+      <div class="muted">Active lectures</div>
+      <pre id="activeLectures">[]</pre>
+    </div>
+  </div>
+
+  <div style="margin-top: 12px;">
+    <img id="frame" alt="camera stream frame will appear here" />
+  </div>
+
+  <div class="row" style="margin-top: 12px;">
+    <div class="card" style="flex: 1;">
+      <div class="muted">Log</div>
+      <pre id="log"></pre>
+    </div>
+  </div>
 
   <script>
-    const statusEl = document.getElementById("status");
-    const imgEl = document.getElementById("frame");
-    const logEl = document.getElementById("log");
-    const btn = document.getElementById("btn");
+    const el = (id) => document.getElementById(id);
 
-    const ws = new WebSocket("ws://localhost:8000/ws/stream");
-    ws.binaryType = "arraybuffer";
+    const baseUrlEl = el("baseUrl");
+    const lectureIdEl = el("lectureId");
 
-    ws.onopen = () => statusEl.textContent = "status: connected";
-    ws.onclose = () => statusEl.textContent = "status: closed";
-    ws.onerror = (e) => statusEl.textContent = "status: error (see console)";
+    const btnList = el("btnList");
+    const btnStart = el("btnStart");
+    const btnEnd = el("btnEnd");
 
-    ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") {
-        logEl.textContent = ev.data + "\n" + logEl.textContent;
-        return;
+    const btnConnect = el("btnConnect");
+    const btnDisconnect = el("btnDisconnect");
+    const btnRecognize = el("btnRecognize");
+
+    const wsStatusEl = el("wsStatus");
+    const apiStatusEl = el("apiStatus");
+    const logEl = el("log");
+    const frameEl = el("frame");
+    const startInfoEl = el("startInfo");
+    const activeLecturesEl = el("activeLectures");
+
+    let ws = null;
+    let lastObjectUrl = null;
+
+    function log(line) {
+      const ts = new Date().toISOString();
+      logEl.textContent = `[${ts}] ${line}\n` + logEl.textContent;
+    }
+
+    function normalizeBaseUrl(url) {
+      url = (url || "").trim();
+      if (!url) return "";
+      // remove trailing slash
+      return url.replace(/\/+$/, "");
+    }
+
+    function deriveDefaultBaseUrl() {
+      // If opened via http(s), use same origin; if file://, fallback to localhost
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        return `${location.protocol}//${location.host}`;
       }
-      const blob = new Blob([ev.data], { type: "image/jpeg" });
-      const url = URL.createObjectURL(blob);
-      imgEl.src = url;
-      imgEl.onload = () => URL.revokeObjectURL(url);
+      return "http://localhost:8000";
+    }
+
+    function getLectureId() {
+      const id = (lectureIdEl.value || "").trim();
+      if (!id) throw new Error("lecture_id is empty");
+      return id;
+    }
+
+    function buildApiUrl(path) {
+      const base = normalizeBaseUrl(baseUrlEl.value);
+      if (!base) throw new Error("baseUrl is empty");
+      return base + path;
+    }
+
+    function buildWsUrl(lectureId) {
+      const base = normalizeBaseUrl(baseUrlEl.value);
+      if (!base) throw new Error("baseUrl is empty");
+
+      const u = new URL(base);
+      const wsProto = (u.protocol === "https:") ? "wss:" : "ws:";
+      return `${wsProto}//${u.host}/ws/stream?lecture_id=${encodeURIComponent(lectureId)}`;
+    }
+
+    async function apiJson(method, url, body) {
+      apiStatusEl.textContent = `${method} ${url}`;
+      const res = await fetch(url, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch (_) { data = { raw: text }; }
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
+      return data;
+    }
+
+    function setWsUi(connected) {
+      btnConnect.disabled = connected;
+      btnDisconnect.disabled = !connected;
+      btnRecognize.disabled = !connected;
+      wsStatusEl.textContent = connected ? "WS: connected" : "WS: disconnected";
+    }
+
+    function closeWs() {
+      if (!ws) return;
+      try { ws.close(); } catch (_) {}
+      ws = null;
+      setWsUi(false);
+    }
+
+    // init defaults
+    baseUrlEl.value = "http://localhost:8000";
+    lectureIdEl.value = "123";
+
+    btnList.onclick = async () => {
+      try {
+        const data = await apiJson("GET", buildApiUrl("/api/lectures"), null);
+        activeLecturesEl.textContent = JSON.stringify(data.active ?? data, null, 2);
+        log(`Active lectures: ${JSON.stringify(data.active ?? data)}`);
+      } catch (e) {
+        log(`List error: ${e.message}`);
+      } finally {
+        apiStatusEl.textContent = "";
+      }
     };
 
-    btn.onclick = () => {
+    btnStart.onclick = async () => {
+      try {
+        const lectureId = getLectureId();
+        // Optional: you can pass expires_ms/message_ttl_ms here if you want
+        const data = await apiJson("POST", buildApiUrl(`/api/lectures/${encodeURIComponent(lectureId)}/start`), {
+          durable: true,
+          auto_delete: false,
+          expires_ms: null,
+          message_ttl_ms: null
+        });
+        startInfoEl.textContent = JSON.stringify(data, null, 2);
+        log(`Lecture started: ${lectureId} (queue=${data.queue}, rk=${data.routing_key})`);
+        // refresh list
+        btnList.click();
+      } catch (e) {
+        log(`Start error: ${e.message}`);
+      } finally {
+        apiStatusEl.textContent = "";
+      }
+    };
+
+    btnEnd.onclick = async () => {
+      try {
+        const lectureId = getLectureId();
+        const data = await apiJson("POST", buildApiUrl(`/api/lectures/${encodeURIComponent(lectureId)}/end`), {
+          if_unused: false,
+          if_empty: false
+        });
+        log(`Lecture ended: ${lectureId} (deleted=${data.deleted})`);
+        // close WS if it was this lecture
+        closeWs();
+        // refresh list
+        btnList.click();
+      } catch (e) {
+        log(`End error: ${e.message}`);
+      } finally {
+        apiStatusEl.textContent = "";
+      }
+    };
+
+    btnConnect.onclick = async () => {
+      try {
+        const lectureId = getLectureId();
+        const wsUrl = buildWsUrl(lectureId);
+
+        closeWs();
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => {
+          setWsUi(true);
+          log(`WS connected: ${wsUrl}`);
+        };
+
+        ws.onclose = () => {
+          setWsUi(false);
+          log("WS closed");
+        };
+
+        ws.onerror = (e) => {
+          log("WS error (see console)");
+          console.error(e);
+        };
+
+        ws.onmessage = (ev) => {
+          if (typeof ev.data === "string") {
+            log(`WS text: ${ev.data}`);
+            return;
+          }
+
+          // JPEG frame
+          if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
+          const blob = new Blob([ev.data], { type: "image/jpeg" });
+          lastObjectUrl = URL.createObjectURL(blob);
+          frameEl.src = lastObjectUrl;
+        };
+      } catch (e) {
+        log(`Connect error: ${e.message}`);
+        closeWs();
+      }
+    };
+
+    btnDisconnect.onclick = () => {
+      closeWs();
+      log("WS manually disconnected");
+    };
+
+    btnRecognize.onclick = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        log("WS is not open");
+        return;
+      }
       ws.send(JSON.stringify({ type: "recognize_now" }));
+      log("Sent: recognize_now");
     };
   </script>
 </body>
