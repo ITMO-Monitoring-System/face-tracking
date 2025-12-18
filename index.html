@@ -118,7 +118,7 @@
       if (location.protocol === "http:" || location.protocol === "https:") {
         return `${location.protocol}//${location.host}`;
       }
-      return "http://localhost:8000";
+      return "http://89.111.170.130:8000";
     }
 
     function getLectureId() {
@@ -174,7 +174,7 @@
     }
 
     // init defaults
-    baseUrlEl.value = "http://localhost:8000";
+    baseUrlEl.value = deriveDefaultBaseUrl();
     lectureIdEl.value = "123";
 
     btnList.onclick = async () => {
