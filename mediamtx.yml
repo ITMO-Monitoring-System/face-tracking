@@ -9,4 +9,3 @@ rtspTransports: [tcp]
 paths:
   lecture:
     source: publisher
-    sourceOnDemand: yes
