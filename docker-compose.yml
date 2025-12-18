@@ -1,11 +1,34 @@
-version: "3.8"
 services:
-  face_tracking_rabbitmq1:
+  rabbitmq:
     image: rabbitmq:3-management
-    container_name: face-tracking-rabbitmq1
+    container_name: rabbitmq
     ports:
       - "5673:5672"
       - "15673:15672"
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+    restart: unless-stopped
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    ports:
+      - "8554:8554"   # RTSP
+    restart: unless-stopped
+
+  face_tracking:
+    build: .
+    container_name: face-tracking
+    ports:
+      - "8000:8000"
+    environment:
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      RABBITMQ_EXCHANGE: "faces"
+      CAMERA_SOURCE: "rtsp://mediamtx:8554/lecture"
+      FPS: "15"
+      JPEG_QUALITY: "80"
+    depends_on:
+      - rabbitmq
+      - mediamtx
+    restart: unless-stopped

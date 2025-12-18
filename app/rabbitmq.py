@@ -15,11 +15,6 @@ class LectureBinding:
 
 
 class FacePublisher:
-    """
-    One connection/channel/exchange for the whole service.
-    Per-lecture queues are declared/bound dynamically.
-    """
-
     def __init__(
         self,
         url: str,
@@ -84,9 +79,8 @@ class FacePublisher:
             raise RuntimeError("publisher not connected")
 
         async with self._lock:
-            existing = self._bindings.get(lecture_id)
-            if existing:
-                return existing
+            if lecture_id in self._bindings:
+                return self._bindings[lecture_id]
 
             queue_name = self._queue_name(lecture_id)
             routing_key = self._routing_key(lecture_id)
@@ -114,27 +108,15 @@ class FacePublisher:
             self._bindings[lecture_id] = binding
             return binding
 
-    async def end_lecture(
-        self,
-        lecture_id: str,
-        *,
-        if_unused: bool = False,
-        if_empty: bool = False,
-    ) -> bool:
+    async def end_lecture(self, lecture_id: str, *, if_unused: bool = False, if_empty: bool = False) -> bool:
         async with self._lock:
             binding = self._bindings.pop(lecture_id, None)
             if not binding:
                 return False
-
             await binding.queue.delete(if_unused=if_unused, if_empty=if_empty)
             return True
 
-    async def publish_face_jpeg(
-        self,
-        lecture_id: str,
-        jpeg_bytes: bytes,
-        headers: dict | None,
-    ) -> None:
+    async def publish_face_jpeg(self, lecture_id: str, jpeg_bytes: bytes, headers: dict | None) -> None:
         if not self._exchange:
             raise RuntimeError("publisher not connected")
 

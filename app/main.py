@@ -5,28 +5,19 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
 from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from .camera import CameraWorker
 from .config import settings
 from .detector import FaceDetector
 from .rabbitmq import FacePublisher
 
-
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 detector = FaceDetector(settings.face_cascade_path)
-camera = CameraWorker(settings.camera_id, detector)
+camera = CameraWorker(settings.camera_source, detector, reconnect_interval=settings.camera_reconnect_interval)
+
 publisher = FacePublisher(
     settings.rabbitmq_url,
     settings.exchange_name,
@@ -58,16 +49,16 @@ async def shutdown() -> None:
     camera.stop()
     await publisher.close()
 
+
 @app.get("/")
 async def root():
     return FileResponse("index.html")
 
+
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True}
+    return {"ok": True, "camera_source": settings.camera_source}
 
-
-# ---- Lecture control API ----
 
 @app.get("/api/lectures")
 async def list_lectures() -> dict:
@@ -84,31 +75,20 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         expires_ms=req.expires_ms,
         message_ttl_ms=req.message_ttl_ms,
     )
-    return {
-        "ok": True,
-        "lecture_id": lecture_id,
-        "queue": binding.queue_name,
-        "routing_key": binding.routing_key,
-    }
+    return {"ok": True, "lecture_id": lecture_id, "queue": binding.queue_name, "routing_key": binding.routing_key}
 
 
 @app.post("/api/lectures/{lecture_id}/end")
 async def end_lecture(lecture_id: str, req: LectureEndRequest | None = None) -> dict:
     req = req or LectureEndRequest()
-    deleted = await publisher.end_lecture(
-        lecture_id,
-        if_unused=req.if_unused,
-        if_empty=req.if_empty,
-    )
+    deleted = await publisher.end_lecture(lecture_id, if_unused=req.if_unused, if_empty=req.if_empty)
     return {"ok": True, "lecture_id": lecture_id, "deleted": deleted}
 
-
-# ---- Face publish ----
 
 async def publish_current_faces(lecture_id: str) -> dict:
     frame, faces, ts = camera.snapshot()
     if frame is None:
-        return {"published": 0, "error": "no_frame_yet"}
+        return {"published": 0, "error": "no_frame_yet", "lecture_id": lecture_id}
 
     crops = detector.crop_faces(frame, faces)
     published = 0
@@ -117,7 +97,7 @@ async def publish_current_faces(lecture_id: str) -> dict:
         jpeg = camera.encode_jpeg(crop, settings.jpeg_quality)
         headers = {
             "ts": ts,
-            "camera_id": settings.camera_id,
+            "camera_source": settings.camera_source,
             "idx": idx,
             "bbox": [bbox.x, bbox.y, bbox.w, bbox.h],
         }
@@ -126,10 +106,6 @@ async def publish_current_faces(lecture_id: str) -> dict:
 
     return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id}
 
-
-# ---- WebSocket stream ----
-# фронт подключается так:
-#   ws://host/ws/stream?lecture_id=<ID>
 
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket) -> None:
