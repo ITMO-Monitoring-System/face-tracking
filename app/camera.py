@@ -71,7 +71,7 @@ class CameraWorker:
         if self._source == "none":
             return None
 
-        cap = cv2.VideoCapture(self._source)
+        cap = cv2.VideoCapture(self._source, cv2.CAP_FFMPEG)
         if not cap.isOpened():
             cap.release()
             return None
@@ -107,7 +107,11 @@ class CameraWorker:
                 continue
 
             fail_count = 0
-            faces = self._detector.detect(frame)
+            try:
+                faces = self._detector.detect(frame)
+            except Exception:
+                faces = []
+
             with self._lock:
                 self._last_frame = frame
                 self._last_faces = faces

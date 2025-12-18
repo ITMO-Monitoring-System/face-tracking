@@ -26,6 +26,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      OPENCV_FFMPEG_CAPTURE_OPTIONS: "rtsp_transport;tcp|stimeout;5000000"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq_face_tracking:5672/"
       RABBITMQ_EXCHANGE: "faces"
       CAMERA_SOURCE: "rtsp://mediamtx:8554/lecture"
