@@ -1,11 +1,11 @@
 logLevel: info
-
 readTimeout: 10m
 writeTimeout: 10m
-
 rtsp: yes
 rtspTransports: [tcp]
 
 paths:
-  all:
+  "lecture":
+    source: publisher
+  "lecture_*":
     source: publisher
