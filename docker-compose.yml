@@ -1,7 +1,7 @@
 services:
   rabbitmq:
     image: rabbitmq:3-management
-    container_name: rabbitmq
+    container_name: rabbitmq_face_tracking
     ports:
       - "5673:5672"
       - "15673:15672"
@@ -23,7 +23,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq_face_tracking:5672/"
       RABBITMQ_EXCHANGE: "faces"
       CAMERA_SOURCE: "rtsp://mediamtx:8554/lecture"
       FPS: "15"
