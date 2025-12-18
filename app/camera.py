@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -10,13 +10,32 @@ import numpy as np
 from .detector import FaceBox, FaceDetector
 
 
-class CameraWorker:
-    def __init__(self, camera_id: int, detector: FaceDetector):
-        self._cap = cv2.VideoCapture(camera_id)
-        if not self._cap.isOpened():
-            raise RuntimeError(f"Cannot open camera id={camera_id}")
+def _parse_source(src: str) -> Union[int, str]:
+    s = (src or "").strip()
+    if s.lower() in ("none", "off", "disabled", ""):
+        return "none"
+    # "0", "1", "2" -> int camera id
+    if s.isdigit():
+        return int(s)
+    return s  # rtsp/http file path etc
 
+
+class CameraWorker:
+    """
+    Camera worker that:
+    - supports int camera id OR rtsp url via CAMERA_SOURCE
+    - doesn't crash if source is unavailable
+    - reconnects in background
+    """
+
+    def __init__(self, source: str, detector: FaceDetector, reconnect_interval: float = 1.0):
+        self._source_raw = source
+        self._source = _parse_source(source)
+        self._reconnect_interval = float(reconnect_interval)
+
+        self._cap: Optional[cv2.VideoCapture] = None
         self._detector = detector
+
         self._lock = threading.Lock()
         self._stop = threading.Event()
 
@@ -26,21 +45,68 @@ class CameraWorker:
 
         self._thread = threading.Thread(target=self._loop, daemon=True)
 
+    @property
+    def source(self) -> str:
+        return str(self._source_raw)
+
+    def enabled(self) -> bool:
+        return self._source != "none"
+
     def start(self) -> None:
+        if not self.enabled():
+            return
+        if self._thread.is_alive():
+            return
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=2)
-        self._cap.release()
+        if self._thread.is_alive():
+            self._thread.join(timeout=2)
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+
+    def _open_capture(self) -> Optional[cv2.VideoCapture]:
+        if self._source == "none":
+            return None
+
+        cap = cv2.VideoCapture(self._source)
+        if not cap.isOpened():
+            cap.release()
+            return None
+
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        return cap
 
     def _loop(self) -> None:
+        fail_count = 0
+
         while not self._stop.is_set():
+            if self._cap is None or not self._cap.isOpened():
+                self._cap = self._open_capture()
+                if self._cap is None:
+                    time.sleep(self._reconnect_interval)
+                    continue
+                fail_count = 0
+
             ok, frame = self._cap.read()
-            if not ok:
+            if not ok or frame is None:
+                fail_count += 1
                 time.sleep(0.05)
+                if fail_count >= 10:
+                    try:
+                        self._cap.release()
+                    except Exception:
+                        pass
+                    self._cap = None
                 continue
 
+            fail_count = 0
             faces = self._detector.detect(frame)
             with self._lock:
                 self._last_frame = frame
