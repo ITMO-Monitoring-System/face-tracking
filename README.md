@@ -12,7 +12,7 @@ docker compose up -d --build
 
 Открыть:
 ```
-http://<server-ip>:8000/
+http://89.111.170.130:8000/
 ```
 
 
