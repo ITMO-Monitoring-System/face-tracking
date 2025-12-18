@@ -98,7 +98,7 @@ class CameraWorker:
             if not ok or frame is None:
                 fail_count += 1
                 time.sleep(0.05)
-                if fail_count >= 10:
+                if fail_count >= 300:
                     try:
                         self._cap.release()
                     except Exception:
