@@ -3,3 +3,4 @@ uvicorn[standard]==0.30.6
 aio-pika==9.4.3
 opencv-python-headless==4.10.0.84
 numpy==2.1.1
+aiohttp==3.11.0
