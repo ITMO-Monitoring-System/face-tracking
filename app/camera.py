@@ -88,8 +88,10 @@ class CameraWorker:
 
         while not self._stop.is_set():
             if self._cap is None or not self._cap.isOpened():
+                print(f"Opening capture: {self._source}")
                 self._cap = self._open_capture()
                 if self._cap is None:
+                    print(f"Failed to open capture, retrying in {self._reconnect_interval}s")
                     time.sleep(self._reconnect_interval)
                     continue
                 fail_count = 0
@@ -97,6 +99,7 @@ class CameraWorker:
             ok, frame = self._cap.read()
             if not ok or frame is None:
                 fail_count += 1
+                print(f"Failed to read frame ({fail_count})")
                 time.sleep(0.05)
                 if fail_count >= 300:
                     try:
@@ -107,6 +110,7 @@ class CameraWorker:
                 continue
 
             fail_count = 0
+            print(f"Frame captured: {frame.shape if frame is not None else 'None'}")
 
             with self._lock:
                 self._last_frame = frame
