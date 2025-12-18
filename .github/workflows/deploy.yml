@@ -29,13 +29,13 @@ jobs:
             --exclude ".git" \
             --exclude ".env" \
             ./ \
-            "${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:/opt/face-tracking/"
+            "${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:/home/deploy/face-tracking/"
 
       - name: Build & run containers on server
         run: |
           ssh -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}" << 'EOF'
             set -e
-            cd /opt/face-tracking
+            cd /home/deploy/face-tracking
             docker compose -p face-tracking up -d --build
             docker compose -p face-tracking ps
           EOF
