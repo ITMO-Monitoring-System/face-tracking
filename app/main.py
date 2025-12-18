@@ -29,12 +29,13 @@ publisher = FacePublisher(
 lecture_manager = LectureManager(detector, reconnect_interval=settings.camera_reconnect_interval)
 
 
-
 def _resolve_source(lecture_id: str, source: str | None) -> str:
     src = (source or settings.camera_source).strip()
-    # поддержка шаблона: "rtsp://.../lecture_{lecture_id}"
-    if "{lecture_id}" in src:
-        src = src.format(lecture_id=lecture_id)
+
+    # Для медиамукс используем lecture_123 формат
+    if src.startswith("rtsp://mediamtx:8554/lecture"):
+        return f"{src}_{lecture_id}"
+
     return src
 
 
