@@ -15,8 +15,6 @@ services:
     container_name: mediamtx
     ports:
       - "8554:8554"   # RTSP
-    volumes:
-      - ./mediamtx.yml:/mediamtx.yml:ro
     restart: unless-stopped
 
   face_tracking:
