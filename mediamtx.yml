@@ -3,9 +3,8 @@ readTimeout: 10m
 writeTimeout: 10m
 rtsp: yes
 rtspTransports: [tcp]
+api: true
 
 paths:
-  "lecture":
-    source: publisher
-  "lecture_*":
+  lecture:
     source: publisher

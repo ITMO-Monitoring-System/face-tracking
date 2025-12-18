@@ -13,6 +13,7 @@ from .config import settings
 from .detector import FaceDetector
 from .rabbitmq import FacePublisher
 from .lecture_manager import LectureManager
+from .media_api import MediaMtxAPI
 
 app = FastAPI()
 
@@ -27,6 +28,7 @@ publisher = FacePublisher(
 )
 
 lecture_manager = LectureManager(detector, reconnect_interval=settings.camera_reconnect_interval)
+media_api = MediaMtxAPI()
 
 
 def _resolve_source(lecture_id: str, source: str | None) -> str:
@@ -82,6 +84,11 @@ async def list_lectures() -> dict:
 async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None) -> dict:
     req = req or LectureStartRequest()
 
+    # Создаем путь в медиамукс
+    path_name = f"lecture_{lecture_id}"
+    await media_api.create_path(path_name)
+
+    # Создаем очередь в RabbitMQ
     binding = await publisher.start_lecture(
         lecture_id,
         durable=req.durable,
@@ -90,6 +97,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         message_ttl_ms=req.message_ttl_ms,
     )
 
+    # Запускаем камеру
     src = _resolve_source(lecture_id, req.camera_source)
     lecture_manager.start_camera(lecture_id, src)
 
@@ -99,6 +107,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         "queue": binding.queue_name,
         "routing_key": binding.routing_key,
         "camera_source": src,
+        "media_path": path_name
     }
 
 
@@ -106,7 +115,14 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
 async def end_lecture(lecture_id: str, req: LectureEndRequest | None = None) -> dict:
     req = req or LectureEndRequest()
 
+    # Останавливаем камеру
     lecture_manager.stop_camera(lecture_id)
+
+    # Удаляем путь из медиамукс
+    path_name = f"lecture_{lecture_id}"
+    await media_api.delete_path(path_name)
+
+    # Удаляем очередь из RabbitMQ
     deleted = await publisher.end_lecture(lecture_id, if_unused=req.if_unused, if_empty=req.if_empty)
 
     return {"ok": True, "lecture_id": lecture_id, "deleted": deleted}
