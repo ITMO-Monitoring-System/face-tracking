@@ -18,7 +18,7 @@ services:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
       - "8554:8554"
-      - "9999:9999"
+      - "127.0.0.1:9997:9997"
 
   face_tracking:
     build: .
@@ -29,7 +29,7 @@ services:
       OPENCV_FFMPEG_CAPTURE_OPTIONS: "rtsp_transport;tcp|stimeout;5000000"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq_face_tracking:5672/"
       RABBITMQ_EXCHANGE: "faces"
-      CAMERA_SOURCE: "rtsp://mediamtx:8554/lecture_{lecture_id}"
+      CAMERA_SOURCE: "rtsp://mediamtx:8554/lecture"
       FPS: "15"
       JPEG_QUALITY: "80"
     depends_on:
