@@ -7,5 +7,5 @@ rtsp: yes
 rtspTransports: [tcp]
 
 paths:
-  lecture:
+  all:
     source: publisher
