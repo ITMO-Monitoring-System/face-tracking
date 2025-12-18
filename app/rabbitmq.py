@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import base64
+import json
+from dataclasses import asdict
+import uuid
 
 import aio_pika
 
@@ -116,7 +120,7 @@ class FacePublisher:
             await binding.queue.delete(if_unused=if_unused, if_empty=if_empty)
             return True
 
-    async def publish_face_jpeg(self, lecture_id: str, jpeg_bytes: bytes, headers: dict | None) -> None:
+    async def publish_face_jpeg(self, lecture_id: str, jpeg_bytes: bytes, metadata: dict | None) -> None:
         if not self._exchange:
             raise RuntimeError("publisher not connected")
 
@@ -124,13 +128,26 @@ class FacePublisher:
         if not binding:
             raise RuntimeError(f"lecture not started: {lecture_id}")
 
-        hdrs = dict(headers or {})
-        hdrs.setdefault("lecture_id", lecture_id)
+        # Кодируем JPEG в base64
+        image_b64 = base64.b64encode(jpeg_bytes).decode('ascii')
+
+        # Формируем JSON сообщение
+        message_data = {
+            "request_id": str(uuid.uuid4()),  # или можно использовать другой ID
+            "image_b64": image_b64
+        }
+
+        # Добавляем метаданные в сообщение, если они есть
+        if metadata:
+            message_data.update(metadata)
+
+        # Сериализуем в JSON
+        json_body = json.dumps(message_data).encode('utf-8')
 
         msg = aio_pika.Message(
-            body=jpeg_bytes,
-            content_type="image/jpeg",
-            headers=hdrs,
+            body=json_body,
+            content_type="application/json",  # Меняем content_type
+            headers={"lecture_id": lecture_id},  # Оставляем только lecture_id в заголовках
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
         )
         await self._exchange.publish(msg, routing_key=binding.routing_key)

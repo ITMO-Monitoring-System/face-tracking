@@ -91,19 +91,22 @@ async def publish_current_faces(lecture_id: str) -> dict:
         return {"published": 0, "error": "no_frame_yet", "lecture_id": lecture_id}
 
     faces = detector.detect(frame)
-
     crops = detector.crop_faces(frame, faces)
     published = 0
 
     for idx, (bbox, crop) in enumerate(crops):
         jpeg = camera.encode_jpeg(crop, settings.jpeg_quality)
-        headers = {
+
+        # Формируем метаданные для JSON сообщения
+        metadata = {
             "ts": ts,
             "camera_source": settings.camera_source,
             "idx": idx,
             "bbox": [bbox.x, bbox.y, bbox.w, bbox.h],
+            "lecture_id": lecture_id  # Добавляем lecture_id в тело сообщения
         }
-        await publisher.publish_face_jpeg(lecture_id, jpeg, headers=headers)
+
+        await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
         published += 1
 
     return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id}
