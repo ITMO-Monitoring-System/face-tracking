@@ -86,9 +86,11 @@ async def end_lecture(lecture_id: str, req: LectureEndRequest | None = None) -> 
 
 
 async def publish_current_faces(lecture_id: str) -> dict:
-    frame, faces, ts = camera.snapshot()
+    frame, _, ts = camera.snapshot()
     if frame is None:
         return {"published": 0, "error": "no_frame_yet", "lecture_id": lecture_id}
+
+    faces = detector.detect(frame)
 
     crops = detector.crop_faces(frame, faces)
     published = 0
@@ -126,10 +128,12 @@ async def ws_stream(ws: WebSocket) -> None:
 
     async def sender() -> None:
         while True:
-            frame, faces, _ = camera.snapshot()
+            frame, _, _ = camera.snapshot()
             if frame is None:
                 await asyncio.sleep(0.05)
                 continue
+
+            faces = detector.detect(frame)
 
             annotated = detector.annotate(frame, faces)
             jpg = camera.encode_jpeg(annotated, settings.jpeg_quality)

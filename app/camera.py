@@ -107,14 +107,10 @@ class CameraWorker:
                 continue
 
             fail_count = 0
-            try:
-                faces = self._detector.detect(frame)
-            except Exception:
-                faces = []
 
             with self._lock:
                 self._last_frame = frame
-                self._last_faces = faces
+                self._last_faces = []
                 self._last_ts = time.time()
 
     def snapshot(self) -> Tuple[Optional[np.ndarray], List[FaceBox], float]:
