@@ -1,13 +1,11 @@
 logLevel: info
+
 readTimeout: 10m
 writeTimeout: 10m
 
 rtsp: yes
 rtspTransports: [tcp]
 
-api: true
-apiAddress: :9997
-
 paths:
-  "~^lecture_[0-9]+$":
+  lecture:
     source: publisher
