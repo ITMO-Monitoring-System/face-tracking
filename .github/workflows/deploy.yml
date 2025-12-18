@@ -1,0 +1,41 @@
+name: Deploy to server
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload project to server (rsync)
+        run: |
+          rsync -az --delete \
+            --exclude ".git" \
+            --exclude ".env" \
+            ./ \
+            "${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:/opt/face-tracking/"
+
+      - name: Build & run containers on server
+        run: |
+          ssh -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}" << 'EOF'
+            set -e
+            cd /opt/face-tracking
+            docker compose -p face-tracking up -d --build
+            docker compose -p face-tracking ps
+          EOF
