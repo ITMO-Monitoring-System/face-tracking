@@ -4,7 +4,7 @@ readTimeout: 60s
 writeTimeout: 60s
 
 rtsp: yes
-rtspProtocols: [tcp]
+rtspTransports: [tcp]
 
 paths:
   lecture:

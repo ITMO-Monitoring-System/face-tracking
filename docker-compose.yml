@@ -13,8 +13,11 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:latest
     container_name: mediamtx
+    command: [ "/mediamtx.yml" ]
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
-      - "8554:8554"   # RTSP
+      - "8554:8554"
     restart: unless-stopped
 
   face_tracking:
