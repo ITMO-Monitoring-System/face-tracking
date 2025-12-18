@@ -1,0 +1,11 @@
+logLevel: info
+
+readTimeout: 60s
+writeTimeout: 60s
+
+rtsp: yes
+rtspProtocols: [tcp]
+
+paths:
+  lecture:
+    source: publisher
