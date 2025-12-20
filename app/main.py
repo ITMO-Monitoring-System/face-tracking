@@ -109,12 +109,21 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
 
     try:
         async with httpx.AsyncClient(timeout=settings.connect_service_timeout_seconds) as client:
+            if not settings.connect_service_out_amqp_url or not settings.connect_service_out_queue:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "connect_service_out_not_configured: set CONNECT_SERVICE_OUT_AMQP_URL and CONNECT_SERVICE_OUT_QUEUE"
+                    ),
+                )
             resp = await client.post(
                 settings.connect_service_url,
                 json={
                     "lecture_id": lecture_id,
                     "in_amqp_url": settings.connect_service_in_amqp_url,
                     "in_queue": binding.queue_name,
+                    "out_amqp_url": settings.connect_service_out_amqp_url,
+                    "out_queue": settings.connect_service_out_queue,
                 },
             )
             if resp.is_error:
