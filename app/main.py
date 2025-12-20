@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+import httpx
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -65,6 +66,19 @@ async def list_lectures() -> dict:
     return {"active": publisher.active_lectures()}
 
 
+async def _wait_for_camera_frame(*, timeout_seconds: float) -> tuple[Any, float]:
+    deadline = asyncio.get_event_loop().time() + max(0.0, float(timeout_seconds))
+    while True:
+        frame, _, ts = camera.snapshot()
+        if frame is not None:
+            return frame, ts
+
+        if asyncio.get_event_loop().time() >= deadline:
+            raise RuntimeError("camera_not_ready")
+
+        await asyncio.sleep(0.05)
+
+
 @app.post("/api/lectures/{lecture_id}/start")
 async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None) -> dict:
     req = req or LectureStartRequest()
@@ -75,6 +89,38 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         expires_ms=req.expires_ms,
         message_ttl_ms=req.message_ttl_ms,
     )
+
+    try:
+        frame, ts = await _wait_for_camera_frame(timeout_seconds=settings.lecture_start_ready_timeout_seconds)
+        jpeg = camera.encode_jpeg(frame, settings.jpeg_quality)
+        await publisher.publish_face_jpeg(
+            lecture_id,
+            jpeg,
+            metadata={
+                "type": "probe",
+                "ts": ts,
+                "camera_source": settings.camera_source,
+                "lecture_id": lecture_id,
+            },
+        )
+    except Exception as e:
+        await publisher.end_lecture(lecture_id)
+        raise HTTPException(status_code=503, detail=f"lecture_not_ready: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.connect_service_timeout_seconds) as client:
+            resp = await client.post(
+                settings.connect_service_url,
+                json={
+                    "lecture_id": lecture_id,
+                    "amqp_url": settings.rabbitmq_url,
+                    "in_queue": binding.queue_name,
+                },
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        await publisher.end_lecture(lecture_id)
+        raise HTTPException(status_code=502, detail=f"connect_service_error: {e}")
     return {"ok": True, "lecture_id": lecture_id, "queue": binding.queue_name, "routing_key": binding.routing_key}
 
 
