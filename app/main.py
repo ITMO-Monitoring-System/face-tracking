@@ -113,7 +113,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                 settings.connect_service_url,
                 json={
                     "lecture_id": lecture_id,
-                    "amqp_url": settings.rabbitmq_url,
+                    "in_amqp_url": settings.connect_service_in_amqp_url,
                     "in_queue": binding.queue_name,
                 },
             )
