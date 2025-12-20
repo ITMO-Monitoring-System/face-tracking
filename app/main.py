@@ -117,7 +117,16 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                     "in_queue": binding.queue_name,
                 },
             )
-            resp.raise_for_status()
+            if resp.is_error:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"connect_service_error: HTTP {resp.status_code}: {resp.text}"
+                    ),
+                )
+    except HTTPException:
+        await publisher.end_lecture(lecture_id)
+        raise
     except Exception as e:
         await publisher.end_lecture(lecture_id)
         raise HTTPException(status_code=502, detail=f"connect_service_error: {e}")

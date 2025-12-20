@@ -36,7 +36,7 @@ class Settings:
     connect_service_url: str = os.getenv("CONNECT_SERVICE_URL", "http://89.111.170.130:8180/connect")
     connect_service_timeout_seconds: float = float(os.getenv("CONNECT_SERVICE_TIMEOUT_SECONDS", "5.0"))
 
-    lecture_start_ready_timeout_seconds: float = float(os.getenv("LECTURE_START_READY_TIMEOUT_SECONDS", "5.0"))
+    lecture_start_ready_timeout_seconds: float = float(os.getenv("LECTURE_START_READY_TIMEOUT_SECONDS", "15.0"))
 
 
 settings = Settings()
