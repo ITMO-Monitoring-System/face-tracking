@@ -21,6 +21,7 @@ class Settings:
     # RabbitMQ
     rabbitmq_url: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5673/")
     exchange_name: str = os.getenv("RABBITMQ_EXCHANGE", "faces")
+    auto_publish_interval: float = float(os.getenv("AUTO_PUBLISH_INTERVAL", "10.0"))
 
     # Per-lecture routing (очередь на лекцию)
     lecture_queue_template: str = os.getenv(

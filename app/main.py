@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -208,17 +209,49 @@ async def ws_stream(ws: WebSocket) -> None:
     send_interval = 1.0 / max(1, settings.fps)
 
     async def sender() -> None:
+        last_auto_publish = 0
+        last_face_count = 0
+
         while True:
-            frame, _, _ = camera.snapshot()
+            frame, _, ts = camera.snapshot()
             if frame is None:
                 await asyncio.sleep(0.05)
                 continue
 
             faces = detector.detect(frame)
+            current_time = asyncio.get_event_loop().time()
 
+            # Отправка аннотированного кадра в WebSocket
             annotated = detector.annotate(frame, faces)
             jpg = camera.encode_jpeg(annotated, settings.jpeg_quality)
             await ws.send_bytes(jpg)
+
+            # Автоотправка лиц каждые 10 секунд (если есть лица)
+            if settings.auto_publish_interval > 0:
+                time_since_last_publish = current_time - last_auto_publish
+
+                # Условия для отправки:
+                # 1. Прошло нужное время (10 сек)
+                # 2. Есть лица ИЛИ изменилось количество лиц
+                should_publish = (
+                        time_since_last_publish >= settings.auto_publish_interval and
+                        len(faces) > 0 and
+                        (
+                                    len(faces) != last_face_count or time_since_last_publish >= settings.auto_publish_interval * 1.5)
+                )
+
+                if should_publish:
+                    try:
+                        result = await publish_current_faces(lecture_id)
+                        await ws.send_text(json.dumps({
+                            "type": "auto_publish",
+                            "data": result
+                        }))
+                        last_auto_publish = current_time
+                        last_face_count = len(faces)
+                    except Exception as e:
+                        print(f"Auto-publish failed: {e}")
+
             await asyncio.sleep(send_interval)
 
     async def receiver() -> None:
