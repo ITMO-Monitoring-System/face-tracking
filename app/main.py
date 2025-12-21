@@ -131,13 +131,14 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
             in_amqp_url = settings.connect_service_in_amqp_url
             parsed = urlparse(in_amqp_url)
             in_host = parsed.hostname
-            if in_host in {"rabbitmq_face_tracking"}:
+
+            if in_host in {"rabbitmq_face_tracking", "localhost", "127.0.0.1"}:
                 raise HTTPException(
                     status_code=500,
                     detail=(
                         "connect_service_in_amqp_url_not_reachable: "
                         f"in_amqp_url={in_amqp_url}. "
-                        "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port (e.g. :5673)."
+                        "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port (e.g. amqp://user:pass@89.111.170.130:5673/)."
                     ),
                 )
 
@@ -145,17 +146,20 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                 "lecture_id": lecture_id,
                 "in_amqp_url": in_amqp_url,
                 "in_queue": binding.queue_name,
-                "threshold": settings.connect_service_threshold,
+                "threshold": settings.connect_service_threshold
             }
+
             resp = await client.post(
                 settings.connect_service_url,
                 json=payload,
             )
+
             if resp.is_error:
                 raise HTTPException(
                     status_code=502,
                     detail=(
-                        f"connect_service_error: in_amqp_url={in_amqp_url} in_queue={binding.queue_name}; "
+                        f"connect_service_error: endpoint={settings.connect_service_url}, "
+                        f"in_amqp_url={in_amqp_url}, in_queue={binding.queue_name}; "
                         f"HTTP {resp.status_code}: {resp.text}"
                     ),
                 )
@@ -167,11 +171,19 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         raise HTTPException(
             status_code=502,
             detail=(
-                f"connect_service_error: in_amqp_url={settings.connect_service_in_amqp_url} "
+                f"connect_service_error: endpoint={settings.connect_service_url}, "
+                f"in_amqp_url={settings.connect_service_in_amqp_url}, "
                 f"in_queue={binding.queue_name}; {e}"
             ),
         )
-    return {"ok": True, "lecture_id": lecture_id, "queue": binding.queue_name, "routing_key": binding.routing_key}
+
+    return {
+        "ok": True,
+        "lecture_id": lecture_id,
+        "queue": binding.queue_name,
+        "routing_key": binding.routing_key,
+        "notified_external_service": True
+    }
 
 
 @app.post("/api/lectures/{lecture_id}/end")

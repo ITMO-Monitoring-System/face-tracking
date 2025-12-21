@@ -34,7 +34,7 @@ class Settings:
     )
 
     # External connect service (notify on lecture start)
-    connect_service_url: str = os.getenv("CONNECT_SERVICE_URL", "http://89.111.170.130:8180/connect")
+    connect_service_url: str = os.getenv("CONNECT_SERVICE_URL", "http://89.111.170.130:8180/api/lecture/start")
     connect_service_timeout_seconds: float = float(os.getenv("CONNECT_SERVICE_TIMEOUT_SECONDS", "5.0"))
 
     connect_service_in_amqp_url: str = os.getenv("CONNECT_SERVICE_IN_AMQP_URL") or rabbitmq_url

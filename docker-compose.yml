@@ -29,6 +29,7 @@ services:
     environment:
       OPENCV_FFMPEG_CAPTURE_OPTIONS: "rtsp_transport;tcp|stimeout;5000000"
       RABBITMQ_URL: "amqp://guest:guest@rabbitmq_face_tracking:5672/"
+      CONNECT_SERVICE_URL: "http://89.111.170.130:8180/api/lecture/start"
       CONNECT_SERVICE_IN_AMQP_URL: "amqp://guest:guest@89.111.170.130:5673/"
       CONNECT_SERVICE_THRESHOLD: "0.45"
       RABBITMQ_EXCHANGE: "faces"
