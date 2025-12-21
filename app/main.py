@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -17,6 +18,22 @@ from .detector import FaceDetector
 from .rabbitmq import FacePublisher
 
 app = FastAPI()
+
+# Настройка CORS для домена http://89.111.170.130:80
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://89.111.170.130",      # Без порта (порт 80 по умолчанию)
+        "http://89.111.170.130:80",   # С явным портом 80
+        "http://localhost",           # Для локального тестирования
+        "http://localhost:80",           # Для локального тестирования
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600,  # Кэшировать preflight на 10 минут
+)
 
 detector = FaceDetector(settings.face_cascade_path)
 camera = CameraWorker(settings.camera_source, detector, reconnect_interval=settings.camera_reconnect_interval)
