@@ -31,6 +31,8 @@ services:
       CONNECT_SERVICE_IN_AMQP_URL: "amqp://guest:guest@89.111.170.130:5673/"
       CONNECT_SERVICE_THRESHOLD: "0.45"
       RABBITMQ_EXCHANGE: "faces"
+      RABBITMQ_LECTURE_QUEUE_TEMPLATE: "faces.queue"
+      RABBITMQ_LECTURE_ROUTING_KEY_TEMPLATE: "faces.face"
       CAMERA_SOURCE: "rtsp://mediamtx:8554/lecture"
       FPS: "15"
       JPEG_QUALITY: "80"

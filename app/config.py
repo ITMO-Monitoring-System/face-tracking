@@ -25,11 +25,11 @@ class Settings:
     # Per-lecture routing (очередь на лекцию)
     lecture_queue_template: str = os.getenv(
         "RABBITMQ_LECTURE_QUEUE_TEMPLATE",
-        "faces.queue.lecture.{lecture_id}",
+        "faces.queue",
     )
     lecture_routing_key_template: str = os.getenv(
         "RABBITMQ_LECTURE_ROUTING_KEY_TEMPLATE",
-        "lecture.{lecture_id}.face",
+        "faces.face",
     )
 
     # External connect service (notify on lecture start)

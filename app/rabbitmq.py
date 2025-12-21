@@ -38,6 +38,10 @@ class FacePublisher:
         self._channel: aio_pika.abc.AbstractRobustChannel | None = None
         self._exchange: aio_pika.Exchange | None = None
 
+        self._shared_queue: aio_pika.Queue | None = None
+        self._shared_queue_name: str | None = None
+        self._shared_routing_key: str | None = None
+
         self._bindings: dict[str, LectureBinding] = {}
 
         import asyncio
@@ -86,22 +90,33 @@ class FacePublisher:
             if lecture_id in self._bindings:
                 return self._bindings[lecture_id]
 
-            queue_name = self._queue_name(lecture_id)
-            routing_key = self._routing_key(lecture_id)
+            # Single shared queue for all lectures.
+            # Queue/routing are computed from templates but are expected to be constant.
+            if not self._shared_queue:
+                queue_name = self._queue_name(lecture_id)
+                routing_key = self._routing_key(lecture_id)
 
-            arguments: dict[str, Any] = {}
-            if expires_ms is not None:
-                arguments["x-expires"] = int(expires_ms)
-            if message_ttl_ms is not None:
-                arguments["x-message-ttl"] = int(message_ttl_ms)
+                arguments: dict[str, Any] = {}
+                if expires_ms is not None:
+                    arguments["x-expires"] = int(expires_ms)
+                if message_ttl_ms is not None:
+                    arguments["x-message-ttl"] = int(message_ttl_ms)
 
-            queue = await self._channel.declare_queue(
-                queue_name,
-                durable=durable,
-                auto_delete=auto_delete,
-                arguments=arguments or None,
-            )
-            await queue.bind(self._exchange, routing_key=routing_key)
+                queue = await self._channel.declare_queue(
+                    queue_name,
+                    durable=durable,
+                    auto_delete=auto_delete,
+                    arguments=arguments or None,
+                )
+                await queue.bind(self._exchange, routing_key=routing_key)
+
+                self._shared_queue = queue
+                self._shared_queue_name = queue_name
+                self._shared_routing_key = routing_key
+            else:
+                queue_name = self._shared_queue_name or self._queue_name(lecture_id)
+                routing_key = self._shared_routing_key or self._routing_key(lecture_id)
+                queue = self._shared_queue
 
             binding = LectureBinding(
                 lecture_id=lecture_id,
@@ -117,7 +132,6 @@ class FacePublisher:
             binding = self._bindings.pop(lecture_id, None)
             if not binding:
                 return False
-            await binding.queue.delete(if_unused=if_unused, if_empty=if_empty)
             return True
 
     async def publish_face_jpeg(self, lecture_id: str, jpeg_bytes: bytes, metadata: dict | None) -> None:
@@ -134,7 +148,8 @@ class FacePublisher:
         # Формируем JSON сообщение
         message_data = {
             "request_id": str(uuid.uuid4()),  # или можно использовать другой ID
-            "image_b64": image_b64
+            "image_b64": image_b64,
+            "lecture_id": lecture_id,
         }
 
         # Добавляем метаданные в сообщение, если они есть
