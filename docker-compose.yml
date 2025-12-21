@@ -19,6 +19,7 @@ services:
     ports:
       - "8554:8554"
       - "9999:9999"
+      - "8888:8888"
 
   face_tracking:
     build: .
