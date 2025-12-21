@@ -6,6 +6,9 @@ writeTimeout: 10m
 rtsp: yes
 rtspTransports: [tcp]
 
+hls: yes
+hlsAddress: :8888
+
 paths:
   lecture:
     source: publisher
