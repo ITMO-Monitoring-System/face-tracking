@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 import httpx
@@ -109,20 +110,35 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
 
     try:
         async with httpx.AsyncClient(timeout=settings.connect_service_timeout_seconds) as client:
+            in_amqp_url = settings.connect_service_in_amqp_url
+            parsed = urlparse(in_amqp_url)
+            in_host = parsed.hostname
+            if in_host in {"rabbitmq_face_tracking", "localhost", "127.0.0.1"}:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "connect_service_in_amqp_url_not_reachable: "
+                        f"in_amqp_url={in_amqp_url}. "
+                        "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port (e.g. :5673)."
+                    ),
+                )
+
+            payload = {
+                "lecture_id": lecture_id,
+                "in_amqp_url": in_amqp_url,
+                "in_queue": binding.queue_name,
+                "threshold": settings.connect_service_threshold,
+            }
             resp = await client.post(
                 settings.connect_service_url,
-                json={
-                    "lecture_id": lecture_id,
-                    "in_amqp_url": settings.connect_service_in_amqp_url,
-                    "in_queue": binding.queue_name,
-                    "threshold": settings.connect_service_threshold,
-                },
+                json=payload,
             )
             if resp.is_error:
                 raise HTTPException(
                     status_code=502,
                     detail=(
-                        f"connect_service_error: HTTP {resp.status_code}: {resp.text}"
+                        f"connect_service_error: in_amqp_url={in_amqp_url} in_queue={binding.queue_name}; "
+                        f"HTTP {resp.status_code}: {resp.text}"
                     ),
                 )
     except HTTPException:
@@ -130,7 +146,13 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         raise
     except Exception as e:
         await publisher.end_lecture(lecture_id)
-        raise HTTPException(status_code=502, detail=f"connect_service_error: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"connect_service_error: in_amqp_url={settings.connect_service_in_amqp_url} "
+                f"in_queue={binding.queue_name}; {e}"
+            ),
+        )
     return {"ok": True, "lecture_id": lecture_id, "queue": binding.queue_name, "routing_key": binding.routing_key}
 
 
