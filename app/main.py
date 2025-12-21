@@ -113,7 +113,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
             in_amqp_url = settings.connect_service_in_amqp_url
             parsed = urlparse(in_amqp_url)
             in_host = parsed.hostname
-            if in_host in {"rabbitmq_face_tracking", "localhost", "127.0.0.1"}:
+            if in_host in {"rabbitmq_face_tracking"}:
                 raise HTTPException(
                     status_code=500,
                     detail=(
