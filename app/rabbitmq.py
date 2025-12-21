@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+import asyncio
 import base64
 import json
-from dataclasses import asdict
 import uuid
+from dataclasses import dataclass
+from typing import Any
 
 import aio_pika
 
@@ -38,13 +38,7 @@ class FacePublisher:
         self._channel: aio_pika.abc.AbstractRobustChannel | None = None
         self._exchange: aio_pika.Exchange | None = None
 
-        self._shared_queue: aio_pika.Queue | None = None
-        self._shared_queue_name: str | None = None
-        self._shared_routing_key: str | None = None
-
         self._bindings: dict[str, LectureBinding] = {}
-
-        import asyncio
         self._lock = asyncio.Lock()
 
     async def connect(self) -> None:
@@ -87,36 +81,26 @@ class FacePublisher:
             raise RuntimeError("publisher not connected")
 
         async with self._lock:
-            if lecture_id in self._bindings:
-                return self._bindings[lecture_id]
+            existing = self._bindings.get(lecture_id)
+            if existing:
+                return existing
 
-            # Single shared queue for all lectures.
-            # Queue/routing are computed from templates but are expected to be constant.
-            if not self._shared_queue:
-                queue_name = self._queue_name(lecture_id)
-                routing_key = self._routing_key(lecture_id)
+            queue_name = self._queue_name(lecture_id)
+            routing_key = self._routing_key(lecture_id)
 
-                arguments: dict[str, Any] = {}
-                if expires_ms is not None:
-                    arguments["x-expires"] = int(expires_ms)
-                if message_ttl_ms is not None:
-                    arguments["x-message-ttl"] = int(message_ttl_ms)
+            arguments: dict[str, Any] = {}
+            if expires_ms is not None:
+                arguments["x-expires"] = int(expires_ms)
+            if message_ttl_ms is not None:
+                arguments["x-message-ttl"] = int(message_ttl_ms)
 
-                queue = await self._channel.declare_queue(
-                    queue_name,
-                    durable=durable,
-                    auto_delete=auto_delete,
-                    arguments=arguments or None,
-                )
-                await queue.bind(self._exchange, routing_key=routing_key)
-
-                self._shared_queue = queue
-                self._shared_queue_name = queue_name
-                self._shared_routing_key = routing_key
-            else:
-                queue_name = self._shared_queue_name or self._queue_name(lecture_id)
-                routing_key = self._shared_routing_key or self._routing_key(lecture_id)
-                queue = self._shared_queue
+            queue = await self._channel.declare_queue(
+                queue_name,
+                durable=durable,
+                auto_delete=auto_delete,
+                arguments=arguments or None,
+            )
+            await queue.bind(self._exchange, routing_key=routing_key)
 
             binding = LectureBinding(
                 lecture_id=lecture_id,
@@ -130,9 +114,24 @@ class FacePublisher:
     async def end_lecture(self, lecture_id: str, *, if_unused: bool = False, if_empty: bool = False) -> bool:
         async with self._lock:
             binding = self._bindings.pop(lecture_id, None)
-            if not binding:
-                return False
-            return True
+
+        if not binding:
+            return False
+
+        deleted_ok = True
+
+        if self._exchange:
+            try:
+                await binding.queue.unbind(self._exchange, routing_key=binding.routing_key)
+            except Exception:
+                pass
+
+        try:
+            await binding.queue.delete(if_unused=if_unused, if_empty=if_empty)
+        except Exception:
+            deleted_ok = False
+
+        return deleted_ok
 
     async def publish_face_jpeg(self, lecture_id: str, jpeg_bytes: bytes, metadata: dict | None) -> None:
         if not self._exchange:
@@ -142,27 +141,22 @@ class FacePublisher:
         if not binding:
             raise RuntimeError(f"lecture not started: {lecture_id}")
 
-        # Кодируем JPEG в base64
-        image_b64 = base64.b64encode(jpeg_bytes).decode('ascii')
+        image_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
 
-        # Формируем JSON сообщение
-        message_data = {
-            "request_id": str(uuid.uuid4()),  # или можно использовать другой ID
+        message_data: dict[str, Any] = {
+            "request_id": str(uuid.uuid4()),
             "image_b64": image_b64,
             "lecture_id": lecture_id,
         }
-
-        # Добавляем метаданные в сообщение, если они есть
         if metadata:
             message_data.update(metadata)
 
-        # Сериализуем в JSON
-        json_body = json.dumps(message_data).encode('utf-8')
+        json_body = json.dumps(message_data).encode("utf-8")
 
         msg = aio_pika.Message(
             body=json_body,
-            content_type="application/json",  # Меняем content_type
-            headers={"lecture_id": lecture_id},  # Оставляем только lecture_id в заголовках
+            content_type="application/json",
+            headers={"lecture_id": lecture_id},
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
         )
         await self._exchange.publish(msg, routing_key=binding.routing_key)
