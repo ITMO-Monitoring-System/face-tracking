@@ -157,9 +157,22 @@ docker compose logs -f face_tracking
 Используйте ffmpeg для трансляции видео на сервер:
 
 ```bash
-ffmpeg -f avfoundation -framerate 30 -video_size 1280x720 -i "0" \
-  -c:v h264_videotoolbox -b:v 1000k -f rtsp -rtsp_transport tcp \
-  "rtsp://сервер:8554/lecture"
+ffmpeg \
+  -f avfoundation \
+  -framerate 30 \
+  -video_size 1280x720 \
+  -pix_fmt uyvy422 \
+  -i "0" \
+  -vf "format=yuv420p" \
+  -c:v h264_videotoolbox \
+  -b:v 1000k \
+  -preset ultrafast \
+  -tune zerolatency \
+  -g 30 \
+  -f rtsp \
+  -rtsp_transport tcp \
+  -muxdelay 0.1 \
+  "rtsp://89.111.170.130:8554/lecture"
 ```
 
 ### Для работы с IP-камерами
