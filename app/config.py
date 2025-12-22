@@ -39,7 +39,7 @@ class Settings:
 
     connect_service_in_amqp_url: str = os.getenv("CONNECT_SERVICE_IN_AMQP_URL") or rabbitmq_url
 
-    connect_service_threshold: float = float(os.getenv("CONNECT_SERVICE_THRESHOLD", "0.45"))
+    connect_service_threshold: float = float(os.getenv("CONNECT_SERVICE_THRESHOLD", "0.2"))
 
     connect_service_out_amqp_url: str | None = os.getenv("CONNECT_SERVICE_OUT_AMQP_URL")
     connect_service_out_queue: str | None = os.getenv("CONNECT_SERVICE_OUT_QUEUE")
