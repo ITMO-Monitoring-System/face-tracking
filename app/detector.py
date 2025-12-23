@@ -38,7 +38,7 @@ class FaceDetector:
         crops: List[Tuple[FaceBox, np.ndarray]] = []
         h_img, w_img = bgr.shape[:2]
         for f in faces:
-            pad = int(0.1 * min(f.w, f.h))
+            pad = int(0.3 * min(f.w, f.h))
             x1 = max(0, f.x - pad)
             y1 = max(0, f.y - pad)
             x2 = min(w_img, f.x + f.w + pad)

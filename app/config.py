@@ -12,6 +12,11 @@ class Settings:
     fps: int = int(os.getenv("FPS", "30"))
     jpeg_quality: int = int(os.getenv("JPEG_QUALITY", "80"))
 
+    # Publish mode:
+    # - "faces" -> send cropped faces (default)
+    # - "frame" -> send full frame (for testing)
+    publish_mode: str = os.getenv("PUBLISH_MODE", "frame").strip().lower()
+
     # Haar cascades
     face_cascade_path: str = os.getenv(
         "FACE_CASCADE_PATH",

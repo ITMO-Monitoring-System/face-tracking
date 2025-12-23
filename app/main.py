@@ -199,25 +199,53 @@ async def publish_current_faces(lecture_id: str) -> dict:
         return {"published": 0, "error": "no_frame_yet", "lecture_id": lecture_id}
 
     faces = detector.detect(frame)
+
+    # как и раньше: если лиц нет — ничего не публикуем
+    if len(faces) == 0:
+        return {"published": 0, "faces": 0, "ts": ts, "lecture_id": lecture_id}
+
+    # ===== TEST MODE: publish full frame =====
+    if getattr(settings, "publish_mode", "faces") == "frame":
+        h, w = frame.shape[:2]
+        jpeg = camera.encode_jpeg(frame, settings.jpeg_quality)
+
+        metadata = {
+            "type": "full_frame",
+            "ts": ts,
+            "camera_source": settings.camera_source,
+            "lecture_id": lecture_id,
+            "idx": 0,
+            # для совместимости пусть будет bbox как "весь кадр"
+            "bbox": [0, 0, w, h],
+            # а здесь — реальные bbox'ы найденных лиц
+            "faces_bboxes": [[f.x, f.y, f.w, f.h] for f in faces],
+            "faces": len(faces),
+            "frame_wh": [w, h],
+        }
+
+        await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
+        return {"published": 1, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "frame"}
+
+    # ===== DEFAULT MODE: publish cropped faces =====
     crops = detector.crop_faces(frame, faces)
     published = 0
 
     for idx, (bbox, crop) in enumerate(crops):
         jpeg = camera.encode_jpeg(crop, settings.jpeg_quality)
 
-        # Формируем метаданные для JSON сообщения
         metadata = {
+            "type": "face_crop",
             "ts": ts,
             "camera_source": settings.camera_source,
             "idx": idx,
             "bbox": [bbox.x, bbox.y, bbox.w, bbox.h],
-            "lecture_id": lecture_id  # Добавляем lecture_id в тело сообщения
+            "lecture_id": lecture_id,
         }
 
         await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
         published += 1
 
-    return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id}
+    return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "faces"}
 
 
 @app.websocket("/ws/stream")

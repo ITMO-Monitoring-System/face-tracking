@@ -39,6 +39,7 @@ services:
       FPS: "15"
       JPEG_QUALITY: "80"
       AUTO_PUBLISH_INTERVAL: "10.0"
+      PUBLISH_MODE: "frame"
     depends_on:
       - rabbitmq
       - mediamtx
