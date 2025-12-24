@@ -36,11 +36,10 @@ class FaceDetector:
         return [FaceBox(int(x), int(y), int(w), int(h)) for (x, y, w, h) in faces]
 
     @staticmethod
-    def annotate_crops(bgr: np.ndarray, crops: List[FaceCrop]) -> np.ndarray:
+    def annotate(bgr: np.ndarray, faces: List[FaceBox]) -> np.ndarray:
         out = bgr.copy()
-        for c in crops:
-            cb = c.crop_box
-            cv2.rectangle(out, (cb.x, cb.y), (cb.x + cb.w, cb.y + cb.h), (255, 0, 0), 2)
+        for f in faces:
+            cv2.rectangle(out, (f.x, f.y), (f.x + f.w, f.y + f.h), (255, 0, 0), 2)
         return out
 
     @staticmethod

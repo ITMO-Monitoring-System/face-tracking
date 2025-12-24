@@ -114,12 +114,8 @@ class CameraWorker:
 
             with self._lock:
                 self._last_frame = frame
-                faces = self._detector.detect(frame)
-
-                with self._lock:
-                    self._last_frame = frame
-                    self._last_faces = faces
-                    self._last_ts = time.time()
+                self._last_faces = []
+                self._last_ts = time.time()
 
     def snapshot(self) -> Tuple[Optional[np.ndarray], List[FaceBox], float]:
         with self._lock:
