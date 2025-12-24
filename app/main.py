@@ -226,20 +226,39 @@ async def publish_current_faces(lecture_id: str) -> dict:
         await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
         return {"published": 1, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "frame"}
 
-    # ===== DEFAULT MODE: publish cropped faces =====
-    crops = detector.crop_faces(frame, faces)
+    # ===== DEFAULT MODE: publish cropped faces=====
+    crops = detector.crop_faces(
+        frame,
+        faces,
+        pad_x_ratio=settings.face_pad_x_ratio,
+        pad_y_ratio=settings.face_pad_y_ratio,
+        top_extra_ratio=settings.face_top_extra_ratio,
+        bottom_extra_ratio=settings.face_bottom_extra_ratio,
+        make_square=settings.face_crop_make_square,
+    )
+
+    h_frame, w_frame = frame.shape[:2]
     published = 0
 
-    for idx, (bbox, crop) in enumerate(crops):
+    for idx, fc in enumerate(crops):
+        crop = fc.image
+        h_crop, w_crop = crop.shape[:2]
+
         jpeg = camera.encode_jpeg(crop, settings.jpeg_quality)
 
         metadata = {
-            "type": "face_crop",
+            "type": "face_head_crop",
             "ts": ts,
             "camera_source": settings.camera_source,
             "idx": idx,
-            "bbox": [bbox.x, bbox.y, bbox.w, bbox.h],
             "lecture_id": lecture_id,
+            "bbox": [0, 0, w_crop, h_crop],
+            "face_bbox": [fc.face_in_crop.x, fc.face_in_crop.y, fc.face_in_crop.w, fc.face_in_crop.h],
+            "original_bbox": [fc.face.x, fc.face.y, fc.face.w, fc.face.h],
+            "crop_bbox": [fc.crop_box.x, fc.crop_box.y, fc.crop_box.w, fc.crop_box.h],
+
+            "frame_wh": [w_frame, h_frame],
+            "crop_wh": [w_crop, h_crop],
         }
 
         await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)

@@ -39,7 +39,11 @@ services:
       FPS: "15"
       JPEG_QUALITY: "80"
       AUTO_PUBLISH_INTERVAL: "10.0"
-      PUBLISH_MODE: "frame"
+      PUBLISH_MODE: "faces"
+      FACE_PAD_Y_RATIO: "0.35"
+      FACE_TOP_EXTRA_RATIO: "0.60"
+      FACE_BOTTOM_EXTRA_RATIO: "0.25"
+      FACE_CROP_MAKE_SQUARE: "true"
     depends_on:
       - rabbitmq
       - mediamtx

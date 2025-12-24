@@ -15,7 +15,18 @@ class Settings:
     # Publish mode:
     # - "faces" -> send cropped faces (default)
     # - "frame" -> send full frame (for testing)
-    publish_mode: str = os.getenv("PUBLISH_MODE", "frame").strip().lower()
+    publish_mode: str = os.getenv("PUBLISH_MODE", "faces").strip().lower()
+
+    # Face crop padding (to include head/around-face context).
+    # Values are relative to detected FACE box size.
+    face_pad_x_ratio: float = float(os.getenv("FACE_PAD_X_RATIO", "0.35"))
+    face_pad_y_ratio: float = float(os.getenv("FACE_PAD_Y_RATIO", "0.35"))
+    face_top_extra_ratio: float = float(os.getenv("FACE_TOP_EXTRA_RATIO", "0.60"))
+    face_bottom_extra_ratio: float = float(os.getenv("FACE_BOTTOM_EXTRA_RATIO", "0.25"))
+
+    face_crop_make_square: bool = os.getenv("FACE_CROP_MAKE_SQUARE", "true").strip().lower() in {
+        "1", "true", "yes", "y", "on",
+    }
 
     # Haar cascades
     face_cascade_path: str = os.getenv(
