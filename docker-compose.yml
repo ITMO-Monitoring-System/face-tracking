@@ -38,7 +38,7 @@ services:
       CAMERA_SOURCE: "rtsp://mediamtx:8554/lecture"
       FPS: "15"
       JPEG_QUALITY: "80"
-      AUTO_PUBLISH_INTERVAL: "10.0"
+      AUTO_PUBLISH_INTERVAL: "1.0"
       PUBLISH_MODE: "faces"
       FACE_PAD_Y_RATIO: "0.35"
       FACE_TOP_EXTRA_RATIO: "0.60"
