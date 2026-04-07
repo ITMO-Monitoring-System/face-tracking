@@ -1,0 +1,11 @@
+.git
+.github
+.codex
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.venv
+venv
+.env
+.env.*
