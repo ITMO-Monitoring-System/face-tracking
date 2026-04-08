@@ -2,6 +2,10 @@ services:
   rabbitmq:
     image: rabbitmq:3-management
     restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - face_tracking_rabbitmq
     ports:
       - "${RABBITMQ_PUBLIC_PORT:-5673}:5672"
       - "127.0.0.1:${RABBITMQ_MANAGEMENT_BIND_PORT:-15673}:15672"
@@ -33,7 +37,7 @@ services:
       OPENCV_FFMPEG_CAPTURE_OPTIONS: "${OPENCV_FFMPEG_CAPTURE_OPTIONS:-rtsp_transport;tcp|stimeout;5000000}"
       RABBITMQ_URL: "${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}"
       CONNECT_SERVICE_URL: "${CONNECT_SERVICE_URL:-http://89.111.170.130:8180/api/lecture/start}"
-      CONNECT_SERVICE_IN_AMQP_URL: "${CONNECT_SERVICE_IN_AMQP_URL:-amqp://guest:guest@89.111.170.130:5673/}"
+      CONNECT_SERVICE_IN_AMQP_URL: "${CONNECT_SERVICE_IN_AMQP_URL:-amqp://guest:guest@face_tracking_rabbitmq:5672/}"
       CONNECT_SERVICE_THRESHOLD: "${CONNECT_SERVICE_THRESHOLD:-0.45}"
       RABBITMQ_EXCHANGE: "${RABBITMQ_EXCHANGE:-faces}"
       RABBITMQ_LECTURE_QUEUE_TEMPLATE: "${RABBITMQ_LECTURE_QUEUE_TEMPLATE:-faces.queue.lecture.{lecture_id}}"
