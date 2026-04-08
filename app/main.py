@@ -73,6 +73,12 @@ class CameraSourceRequest(BaseModel):
     source: str  # "rtsp://...", "0", "1", "none"
 
 
+def _normalize_source_value(source: Any) -> str:
+    if source is None:
+        return ""
+    return str(source).strip()
+
+
 # ──────────────────────────────────────────────
 # Lifecycle
 # ──────────────────────────────────────────────
@@ -121,11 +127,19 @@ async def list_cameras() -> dict:
     Список берётся из CAMERA_SOURCES (JSON-массив строк в env).
     """
     frame, _, _ = camera.snapshot()
+    current = _normalize_source_value(camera.source)
+    sources = [
+        _normalize_source_value(source)
+        for source in settings.camera_sources
+        if _normalize_source_value(source)
+    ]
+    if current and current not in sources:
+        sources.insert(0, current)
     return {
-        "current": camera.source,
+        "current": current,
         "enabled": camera.enabled(),
         "has_frame": frame is not None,
-        "sources": settings.camera_sources,
+        "sources": sources,
     }
 
 
@@ -134,7 +148,7 @@ async def get_current_camera() -> dict:
     """Текущий источник камеры и её статус."""
     frame, _, ts = camera.snapshot()
     return {
-        "source": camera.source,
+        "source": _normalize_source_value(camera.source),
         "enabled": camera.enabled(),
         "has_frame": frame is not None,
         "frame_ts": ts if frame is not None else None,
@@ -147,19 +161,20 @@ async def set_camera_source(req: CameraSourceRequest) -> dict:
     Переключает камеру на новый источник в рантайме.
     Принимает: { "source": "rtsp://...", или "0", "1", "none" }
     """
-    old_source = camera.source
+    requested_source = _normalize_source_value(req.source)
+    old_source = _normalize_source_value(camera.source)
 
     # Запускаем switch_source в thread-pool, т.к. join() блокирует event loop
     loop = asyncio.get_event_loop()
     try:
-        await loop.run_in_executor(None, camera.switch_source, req.source)
+        await loop.run_in_executor(None, camera.switch_source, requested_source)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to switch camera: {e}")
 
     return {
         "ok": True,
         "old_source": old_source,
-        "new_source": camera.source,
+        "new_source": _normalize_source_value(camera.source),
         "enabled": camera.enabled(),
     }
 
@@ -197,6 +212,8 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         message_ttl_ms=req.message_ttl_ms,
     )
 
+    probe_sent = False
+    camera_warning: str | None = None
     try:
         frame, ts = await _wait_for_camera_frame(timeout_seconds=settings.lecture_start_ready_timeout_seconds)
         jpeg = camera.encode_jpeg(frame, settings.jpeg_quality)
@@ -210,9 +227,9 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                 "lecture_id": lecture_id,
             },
         )
+        probe_sent = True
     except Exception as e:
-        await publisher.end_lecture(lecture_id)
-        raise HTTPException(status_code=503, detail=f"lecture_not_ready: {e}")
+        camera_warning = f"camera_not_ready: {e}"
 
     try:
         async with httpx.AsyncClient(timeout=settings.connect_service_timeout_seconds) as client:
@@ -269,6 +286,10 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         "queue": binding.queue_name,
         "routing_key": binding.routing_key,
         "notified_external_service": True,
+        "probe_sent": probe_sent,
+        "camera_ready": probe_sent,
+        "camera_source": _normalize_source_value(camera.source),
+        "warning": camera_warning,
     }
 
 
