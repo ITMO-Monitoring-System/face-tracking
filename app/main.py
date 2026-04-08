@@ -248,8 +248,13 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                     ),
                 )
 
+            try:
+                lecture_id_for_connect = int(lecture_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="lecture_id_must_be_integer")
+
             payload = {
-                "lecture_id": lecture_id,
+                "lecture_id": lecture_id_for_connect,
                 "in_amqp_url": in_amqp_url,
                 "in_queue": binding.queue_name,
                 "threshold": settings.connect_service_threshold,
