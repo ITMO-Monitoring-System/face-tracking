@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List
+
 import cv2
+import mediapipe as mp
 import numpy as np
+
 
 @dataclass(frozen=True)
 class FaceBox:
@@ -11,6 +14,7 @@ class FaceBox:
     y: int
     w: int
     h: int
+
 
 @dataclass(frozen=True)
 class FaceCrop:
@@ -25,21 +29,53 @@ class FaceCrop:
 
 
 class FaceDetector:
-    def __init__(self, cascade_path: str):
-        self._cascade = cv2.CascadeClassifier(cascade_path)
-        if self._cascade.empty():
-            raise RuntimeError(f"Failed to load cascade: {cascade_path}")
+    """
+    Детектор лиц на основе MediaPipe Face Detection.
+
+    model_selection=1 — full-range модель (до 5 м), оптимальна для аудитории.
+    model_selection=0 — short-range (до 2 м), чуть быстрее, для съёмки вблизи.
+    """
+
+    def __init__(self, min_confidence: float = 0.5, model_selection: int = 1):
+        self._min_confidence = float(min_confidence)
+        self._model_selection = int(model_selection)
+
+        _mp_face = mp.solutions.face_detection
+        self._detector = _mp_face.FaceDetection(
+            model_selection=self._model_selection,
+            min_detection_confidence=self._min_confidence,
+        )
 
     def detect(self, bgr: np.ndarray) -> List[FaceBox]:
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        faces = self._cascade.detectMultiScale(gray, 1.1, 5)
-        return [FaceBox(int(x), int(y), int(w), int(h)) for (x, y, w, h) in faces]
+        h_img, w_img = bgr.shape[:2]
+
+        # MediaPipe требует RGB
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        results = self._detector.process(rgb)
+
+        faces: List[FaceBox] = []
+        if not results.detections:
+            return faces
+
+        for det in results.detections:
+            bb = det.location_data.relative_bounding_box
+
+            # Приводим относительные координаты к пикселям, клипуем по границам
+            x = int(max(0.0, bb.xmin) * w_img)
+            y = int(max(0.0, bb.ymin) * h_img)
+            fw = int(min(bb.width, 1.0 - max(0.0, bb.xmin)) * w_img)
+            fh = int(min(bb.height, 1.0 - max(0.0, bb.ymin)) * h_img)
+
+            if fw > 0 and fh > 0:
+                faces.append(FaceBox(x, y, fw, fh))
+
+        return faces
 
     @staticmethod
     def annotate(bgr: np.ndarray, faces: List[FaceBox]) -> np.ndarray:
         out = bgr.copy()
         for f in faces:
-            cv2.rectangle(out, (f.x, f.y), (f.x + f.w, f.y + f.h), (255, 0, 0), 2)
+            cv2.rectangle(out, (f.x, f.y), (f.x + f.w, f.y + f.h), (0, 220, 0), 2)
         return out
 
     @staticmethod

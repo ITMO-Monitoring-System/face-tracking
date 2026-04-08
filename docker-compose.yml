@@ -35,7 +35,21 @@ services:
       RABBITMQ_EXCHANGE: "faces"
       RABBITMQ_LECTURE_QUEUE_TEMPLATE: "faces.queue.lecture.{lecture_id}"
       RABBITMQ_LECTURE_ROUTING_KEY_TEMPLATE: "lecture.{lecture_id}.face"
+
+      # Активный источник камеры при старте
       CAMERA_SOURCE: "rtsp://mediamtx:8554/lecture"
+
+      # Список всех доступных камер для выбора с UI (JSON-массив строк).
+      # Пример с несколькими камерами:
+      # CAMERA_SOURCES: '["rtsp://mediamtx:8554/lecture", "rtsp://cam2:8554/live", "0"]'
+      CAMERA_SOURCES: '["rtsp://mediamtx:8554/lecture"]'
+
+      # MediaPipe Face Detection
+      # FACE_MIN_CONFIDENCE: порог детекции (0.0–1.0, по умолчанию 0.5)
+      # FACE_MODEL_SELECTION: 0 = до 2м (вблизи), 1 = до 5м (аудитория)
+      FACE_MIN_CONFIDENCE: "0.5"
+      FACE_MODEL_SELECTION: "1"
+
       FPS: "15"
       JPEG_QUALITY: "80"
       AUTO_PUBLISH_INTERVAL: "1.0"

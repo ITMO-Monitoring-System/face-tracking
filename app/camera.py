@@ -17,7 +17,7 @@ def _parse_source(src: str) -> Union[int, str]:
     # "0", "1", "2" -> int camera id
     if s.isdigit():
         return int(s)
-    return s  # rtsp/http file path etc
+    return s  # rtsp/http/file path etc
 
 
 class CameraWorker:
@@ -26,6 +26,7 @@ class CameraWorker:
     - supports int camera id OR rtsp url via CAMERA_SOURCE
     - doesn't crash if source is unavailable
     - reconnects in background
+    - supports runtime camera switching via switch_source()
     """
 
     def __init__(self, source: str, detector: FaceDetector, reconnect_interval: float = 1.0):
@@ -62,10 +63,49 @@ class CameraWorker:
     def stop(self) -> None:
         self._stop.set()
         if self._thread.is_alive():
-            self._thread.join(timeout=2)
+            self._thread.join(timeout=3)
         if self._cap is not None:
-            self._cap.release()
+            try:
+                self._cap.release()
+            except Exception:
+                pass
             self._cap = None
+
+    def switch_source(self, new_source: str) -> None:
+        """
+        Переключает камеру на новый источник в рантайме.
+        Останавливает текущий поток захвата и перезапускает с новым источником.
+        Если new_source == "none" — камера просто останавливается.
+        """
+        print(f"Switching camera: {self._source_raw!r} -> {new_source!r}")
+
+        # Останавливаем текущий поток
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=3)
+
+        # Освобождаем захват
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            self._cap = None
+
+        # Сбрасываем кешированный кадр
+        with self._lock:
+            self._last_frame = None
+            self._last_faces = []
+            self._last_ts = 0.0
+
+        # Обновляем источник
+        self._source_raw = new_source
+        self._source = _parse_source(new_source)
+        self._stop.clear()
+
+        # Перезапускаем поток (если источник не "none")
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self.start()
 
     def _open_capture(self) -> Optional[cv2.VideoCapture]:
         if self._source == "none":
@@ -110,7 +150,6 @@ class CameraWorker:
                 continue
 
             fail_count = 0
-            print(f"Frame captured: {frame.shape if frame is not None else 'None'}")
 
             with self._lock:
                 self._last_frame = frame

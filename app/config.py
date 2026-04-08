@@ -1,4 +1,15 @@
+import json
 import os
+
+
+# Парсим список доступных камер из env один раз при импорте
+_camera_sources_raw = os.getenv("CAMERA_SOURCES", "[]")
+try:
+    _camera_sources_parsed: list = json.loads(_camera_sources_raw)
+    if not isinstance(_camera_sources_parsed, list):
+        _camera_sources_parsed = []
+except Exception:
+    _camera_sources_parsed = []
 
 
 class Settings:
@@ -8,6 +19,11 @@ class Settings:
     # - "none"                -> камера отключена
     camera_source: str = os.getenv("CAMERA_SOURCE") or os.getenv("CAMERA_ID", "0")
     camera_reconnect_interval: float = float(os.getenv("CAMERA_RECONNECT_INTERVAL", "1.0"))
+
+    # Список доступных камер для выбора с UI.
+    # Задаётся через CAMERA_SOURCES как JSON-массив строк.
+    # Пример: '["rtsp://cam1:8554/live", "rtsp://cam2:8554/live", "0"]'
+    camera_sources: list = _camera_sources_parsed
 
     fps: int = int(os.getenv("FPS", "30"))
     jpeg_quality: int = int(os.getenv("JPEG_QUALITY", "80"))
@@ -28,11 +44,13 @@ class Settings:
         "1", "true", "yes", "y", "on",
     }
 
-    # Haar cascades
-    face_cascade_path: str = os.getenv(
-        "FACE_CASCADE_PATH",
-        "haarcascades/Haarcascade Frontal Face.xml",
-    )
+    # MediaPipe Face Detection
+    # Порог уверенности (0.0–1.0): чем выше — тем меньше ложных срабатываний.
+    # 0.5 — баланс между чувствительностью и точностью.
+    face_min_confidence: float = float(os.getenv("FACE_MIN_CONFIDENCE", "0.5"))
+
+    # model_selection: 0 = short-range (до 2м), 1 = full-range (до 5м, для аудитории)
+    face_model_selection: int = int(os.getenv("FACE_MODEL_SELECTION", "1"))
 
     # RabbitMQ
     rabbitmq_url: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5673/")

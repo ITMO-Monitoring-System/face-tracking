@@ -19,24 +19,31 @@ from .rabbitmq import FacePublisher
 
 app = FastAPI()
 
-# Настройка CORS для домена http://89.111.170.130:80
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://89.111.170.130",      # Без порта (порт 80 по умолчанию)
-        "http://89.111.170.130:80",   # С явным портом 80
-        "http://localhost",           # Для локального тестирования
-        "http://localhost:80",           # Для локального тестирования
+        "http://89.111.170.130",
+        "http://89.111.170.130:80",
+        "http://localhost",
+        "http://localhost:80",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
-    max_age=600,  # Кэшировать preflight на 10 минут
+    max_age=600,
 )
 
-detector = FaceDetector(settings.face_cascade_path)
-camera = CameraWorker(settings.camera_source, detector, reconnect_interval=settings.camera_reconnect_interval)
+detector = FaceDetector(
+    min_confidence=settings.face_min_confidence,
+    model_selection=settings.face_model_selection,
+)
+
+camera = CameraWorker(
+    settings.camera_source,
+    detector,
+    reconnect_interval=settings.camera_reconnect_interval,
+)
 
 publisher = FacePublisher(
     settings.rabbitmq_url,
@@ -45,6 +52,10 @@ publisher = FacePublisher(
     lecture_routing_key_template=settings.lecture_routing_key_template,
 )
 
+
+# ──────────────────────────────────────────────
+# Pydantic-модели запросов
+# ──────────────────────────────────────────────
 
 class LectureStartRequest(BaseModel):
     durable: bool = True
@@ -58,6 +69,14 @@ class LectureEndRequest(BaseModel):
     if_empty: bool = False
 
 
+class CameraSourceRequest(BaseModel):
+    source: str  # "rtsp://...", "0", "1", "none"
+
+
+# ──────────────────────────────────────────────
+# Lifecycle
+# ──────────────────────────────────────────────
+
 @app.on_event("startup")
 async def startup() -> None:
     camera.start()
@@ -70,6 +89,10 @@ async def shutdown() -> None:
     await publisher.close()
 
 
+# ──────────────────────────────────────────────
+# Базовые эндпоинты
+# ──────────────────────────────────────────────
+
 @app.get("/")
 async def root():
     return FileResponse("index.html")
@@ -77,8 +100,73 @@ async def root():
 
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True, "camera_source": settings.camera_source}
+    frame, _, ts = camera.snapshot()
+    return {
+        "ok": True,
+        "camera_source": camera.source,
+        "camera_enabled": camera.enabled(),
+        "camera_has_frame": frame is not None,
+        "camera_frame_ts": ts if frame is not None else None,
+    }
 
+
+# ──────────────────────────────────────────────
+# Camera API
+# ──────────────────────────────────────────────
+
+@app.get("/api/cameras")
+async def list_cameras() -> dict:
+    """
+    Возвращает текущий источник и список доступных камер.
+    Список берётся из CAMERA_SOURCES (JSON-массив строк в env).
+    """
+    frame, _, _ = camera.snapshot()
+    return {
+        "current": camera.source,
+        "enabled": camera.enabled(),
+        "has_frame": frame is not None,
+        "sources": settings.camera_sources,
+    }
+
+
+@app.get("/api/camera/current")
+async def get_current_camera() -> dict:
+    """Текущий источник камеры и её статус."""
+    frame, _, ts = camera.snapshot()
+    return {
+        "source": camera.source,
+        "enabled": camera.enabled(),
+        "has_frame": frame is not None,
+        "frame_ts": ts if frame is not None else None,
+    }
+
+
+@app.put("/api/camera/source")
+async def set_camera_source(req: CameraSourceRequest) -> dict:
+    """
+    Переключает камеру на новый источник в рантайме.
+    Принимает: { "source": "rtsp://...", или "0", "1", "none" }
+    """
+    old_source = camera.source
+
+    # Запускаем switch_source в thread-pool, т.к. join() блокирует event loop
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, camera.switch_source, req.source)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to switch camera: {e}")
+
+    return {
+        "ok": True,
+        "old_source": old_source,
+        "new_source": camera.source,
+        "enabled": camera.enabled(),
+    }
+
+
+# ──────────────────────────────────────────────
+# Lectures API
+# ──────────────────────────────────────────────
 
 @app.get("/api/lectures")
 async def list_lectures() -> dict:
@@ -118,7 +206,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
             metadata={
                 "type": "probe",
                 "ts": ts,
-                "camera_source": settings.camera_source,
+                "camera_source": camera.source,
                 "lecture_id": lecture_id,
             },
         )
@@ -138,7 +226,8 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                     detail=(
                         "connect_service_in_amqp_url_not_reachable: "
                         f"in_amqp_url={in_amqp_url}. "
-                        "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port (e.g. amqp://user:pass@89.111.170.130:5673/)."
+                        "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port "
+                        "(e.g. amqp://user:pass@89.111.170.130:5673/)."
                     ),
                 )
 
@@ -146,13 +235,10 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                 "lecture_id": lecture_id,
                 "in_amqp_url": in_amqp_url,
                 "in_queue": binding.queue_name,
-                "threshold": settings.connect_service_threshold
+                "threshold": settings.connect_service_threshold,
             }
 
-            resp = await client.post(
-                settings.connect_service_url,
-                json=payload,
-            )
+            resp = await client.post(settings.connect_service_url, json=payload)
 
             if resp.is_error:
                 raise HTTPException(
@@ -182,7 +268,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         "lecture_id": lecture_id,
         "queue": binding.queue_name,
         "routing_key": binding.routing_key,
-        "notified_external_service": True
+        "notified_external_service": True,
     }
 
 
@@ -193,6 +279,10 @@ async def end_lecture(lecture_id: str, req: LectureEndRequest | None = None) -> 
     return {"ok": True, "lecture_id": lecture_id, "deleted": deleted}
 
 
+# ──────────────────────────────────────────────
+# Face publishing logic
+# ──────────────────────────────────────────────
+
 async def publish_current_faces(lecture_id: str) -> dict:
     frame, _, ts = camera.snapshot()
     if frame is None:
@@ -200,11 +290,10 @@ async def publish_current_faces(lecture_id: str) -> dict:
 
     faces = detector.detect(frame)
 
-    # как и раньше: если лиц нет — ничего не публикуем
     if len(faces) == 0:
         return {"published": 0, "faces": 0, "ts": ts, "lecture_id": lecture_id}
 
-    # ===== TEST MODE: publish full frame =====
+    # TEST MODE: публикуем полный кадр
     if getattr(settings, "publish_mode", "faces") == "frame":
         h, w = frame.shape[:2]
         jpeg = camera.encode_jpeg(frame, settings.jpeg_quality)
@@ -212,12 +301,10 @@ async def publish_current_faces(lecture_id: str) -> dict:
         metadata = {
             "type": "full_frame",
             "ts": ts,
-            "camera_source": settings.camera_source,
+            "camera_source": camera.source,
             "lecture_id": lecture_id,
             "idx": 0,
-            # для совместимости пусть будет bbox как "весь кадр"
             "bbox": [0, 0, w, h],
-            # а здесь — реальные bbox'ы найденных лиц
             "faces_bboxes": [[f.x, f.y, f.w, f.h] for f in faces],
             "faces": len(faces),
             "frame_wh": [w, h],
@@ -226,7 +313,7 @@ async def publish_current_faces(lecture_id: str) -> dict:
         await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
         return {"published": 1, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "frame"}
 
-    # ===== DEFAULT MODE: publish cropped faces=====
+    # DEFAULT MODE: кропы лиц
     crops = detector.crop_faces(
         frame,
         faces,
@@ -249,14 +336,13 @@ async def publish_current_faces(lecture_id: str) -> dict:
         metadata = {
             "type": "face_head_crop",
             "ts": ts,
-            "camera_source": settings.camera_source,
+            "camera_source": camera.source,
             "idx": idx,
             "lecture_id": lecture_id,
             "bbox": [0, 0, w_crop, h_crop],
             "face_bbox": [fc.face_in_crop.x, fc.face_in_crop.y, fc.face_in_crop.w, fc.face_in_crop.h],
             "original_bbox": [fc.face.x, fc.face.y, fc.face.w, fc.face.h],
             "crop_bbox": [fc.crop_box.x, fc.crop_box.y, fc.crop_box.w, fc.crop_box.h],
-
             "frame_wh": [w_frame, h_frame],
             "crop_wh": [w_crop, h_crop],
         }
@@ -266,6 +352,10 @@ async def publish_current_faces(lecture_id: str) -> dict:
 
     return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "faces"}
 
+
+# ──────────────────────────────────────────────
+# WebSocket stream
+# ──────────────────────────────────────────────
 
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket) -> None:
@@ -285,7 +375,7 @@ async def ws_stream(ws: WebSocket) -> None:
     send_interval = 1.0 / max(1, settings.fps)
 
     async def sender() -> None:
-        last_auto_publish = 0
+        last_auto_publish = 0.0
         last_face_count = 0
 
         while True:
@@ -297,32 +387,27 @@ async def ws_stream(ws: WebSocket) -> None:
             faces = detector.detect(frame)
             current_time = asyncio.get_event_loop().time()
 
-            # Отправка аннотированного кадра в WebSocket
+            # Отправка аннотированного кадра
             annotated = detector.annotate(frame, faces)
             jpg = camera.encode_jpeg(annotated, settings.jpeg_quality)
             await ws.send_bytes(jpg)
 
-            # Автоотправка лиц каждые 10 секунд (если есть лица)
+            # Автоопубликование лиц по интервалу
             if settings.auto_publish_interval > 0:
-                time_since_last_publish = current_time - last_auto_publish
-
-                # Условия для отправки:
-                # 1. Прошло нужное время (10 сек)
-                # 2. Есть лица ИЛИ изменилось количество лиц
+                time_since_last = current_time - last_auto_publish
                 should_publish = (
-                        time_since_last_publish >= settings.auto_publish_interval and
-                        len(faces) > 0 and
-                        (
-                                    len(faces) != last_face_count or time_since_last_publish >= settings.auto_publish_interval * 1.5)
+                    time_since_last >= settings.auto_publish_interval
+                    and len(faces) > 0
+                    and (
+                        len(faces) != last_face_count
+                        or time_since_last >= settings.auto_publish_interval * 1.5
+                    )
                 )
 
                 if should_publish:
                     try:
                         result = await publish_current_faces(lecture_id)
-                        await ws.send_text(json.dumps({
-                            "type": "auto_publish",
-                            "data": result
-                        }))
+                        await ws.send_text(json.dumps({"type": "auto_publish", "data": result}))
                         last_auto_publish = current_time
                         last_face_count = len(faces)
                     except Exception as e:
