@@ -37,6 +37,12 @@ app.add_middleware(
 detector = FaceDetector(
     min_confidence=settings.face_min_confidence,
     model_selection=settings.face_model_selection,
+    tile_enabled=settings.tile_detect_enabled,
+    tile_cols=settings.tile_detect_cols,
+    tile_rows=settings.tile_detect_rows,
+    tile_overlap=settings.tile_detect_overlap,
+    tile_nms_iou=settings.tile_detect_nms_iou,
+    tile_min_face_px=settings.tile_detect_min_face_px,
 )
 
 camera = CameraWorker(

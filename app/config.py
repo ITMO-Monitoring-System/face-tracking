@@ -52,6 +52,17 @@ class Settings:
     # model_selection: 0 = short-range (до 2м), 1 = full-range (до 5м, для аудитории)
     face_model_selection: int = int(os.getenv("FACE_MODEL_SELECTION", "1"))
 
+    # Tiled detection: разбивает кадр на перекрывающиеся тайлы для нахождения мелких лиц.
+    # Полезно при HD/FullHD разрешении в большой аудитории.
+    tile_detect_enabled: bool = os.getenv("TILE_DETECT_ENABLED", "true").strip().lower() in {
+        "1", "true", "yes", "y", "on",
+    }
+    tile_detect_cols: int = int(os.getenv("TILE_DETECT_COLS", "3"))
+    tile_detect_rows: int = int(os.getenv("TILE_DETECT_ROWS", "2"))
+    tile_detect_overlap: float = float(os.getenv("TILE_DETECT_OVERLAP", "0.3"))
+    tile_detect_nms_iou: float = float(os.getenv("TILE_DETECT_NMS_IOU", "0.4"))
+    tile_detect_min_face_px: int = int(os.getenv("TILE_DETECT_MIN_FACE_PX", "20"))
+
     # RabbitMQ
     rabbitmq_url: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5673/")
     exchange_name: str = os.getenv("RABBITMQ_EXCHANGE", "faces")
