@@ -172,7 +172,7 @@ ffmpeg \
   -f rtsp \
   -rtsp_transport tcp \
   -muxdelay 0.1 \
-  "rtsp://89.111.170.130:8554/lecture"
+  "rtsp://projctviscon.vps.webdock.cloud:8554/lecture"
 ```
 
 ### Для работы с IP-камерами

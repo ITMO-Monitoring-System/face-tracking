@@ -22,8 +22,8 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://89.111.170.130",
-        "http://89.111.170.130:80",
+        "https://projctviscon.vps.webdock.cloud",
+        "http://projctviscon.vps.webdock.cloud",
         "http://localhost",
         "http://localhost:80",
     ],
@@ -244,7 +244,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                         "connect_service_in_amqp_url_not_reachable: "
                         f"in_amqp_url={in_amqp_url}. "
                         "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port "
-                        "(e.g. amqp://user:pass@89.111.170.130:5673/)."
+                        "(e.g. amqp://guest:guest@projctviscon.vps.webdock.cloud:5673/)."
                     ),
                 )
 

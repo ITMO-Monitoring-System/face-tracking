@@ -36,8 +36,8 @@ services:
     environment:
       OPENCV_FFMPEG_CAPTURE_OPTIONS: "${OPENCV_FFMPEG_CAPTURE_OPTIONS:-rtsp_transport;tcp|stimeout;5000000}"
       RABBITMQ_URL: "${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}"
-      CONNECT_SERVICE_URL: "${CONNECT_SERVICE_URL:-http://89.111.170.130:8180/api/lecture/start}"
-      CONNECT_SERVICE_IN_AMQP_URL: "${CONNECT_SERVICE_IN_AMQP_URL:-amqp://guest:guest@face_tracking_rabbitmq:5672/}"
+      CONNECT_SERVICE_URL: "${CONNECT_SERVICE_URL:-https://projctviscon.vps.webdock.cloud/recognizing/api/lecture/start}"
+      CONNECT_SERVICE_IN_AMQP_URL: "${CONNECT_SERVICE_IN_AMQP_URL:-amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@projctviscon.vps.webdock.cloud:${RABBITMQ_PUBLIC_PORT:-5673}/}"
       CONNECT_SERVICE_THRESHOLD: "${CONNECT_SERVICE_THRESHOLD:-0.45}"
       RABBITMQ_EXCHANGE: "${RABBITMQ_EXCHANGE:-faces}"
       RABBITMQ_LECTURE_QUEUE_TEMPLATE: "${RABBITMQ_LECTURE_QUEUE_TEMPLATE:-faces.queue.lecture.{lecture_id}}"
