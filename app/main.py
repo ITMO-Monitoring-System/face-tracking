@@ -385,6 +385,9 @@ async def publish_current_faces(lecture_id: str) -> dict:
 
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket) -> None:
+    import cv2
+    import numpy as np
+
     lecture_id = ws.query_params.get("lecture_id")
     await ws.accept()
 
@@ -398,14 +401,76 @@ async def ws_stream(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
 
-    send_interval = 1.0 / max(1, settings.fps)
+    # Shared state for browser-camera mode
+    browser_frame = None  # latest decoded frame from browser
+    browser_frame_ts: float = 0.0
+    frame_lock = asyncio.Lock()
 
-    async def sender() -> None:
-        last_auto_publish = 0.0
-        last_face_count = 0
+    last_auto_publish = 0.0
+    last_face_count = 0
 
+    async def _publish_faces_from_frame(frame, ts: float) -> dict:
+        """Detect faces in frame and publish crops to RabbitMQ."""
+        faces = detector.detect(frame)
+        if len(faces) == 0:
+            return {"published": 0, "faces": 0, "ts": ts, "lecture_id": lecture_id}
+
+        if getattr(settings, "publish_mode", "faces") == "frame":
+            h, w = frame.shape[:2]
+            jpeg = camera.encode_jpeg(frame, settings.jpeg_quality)
+            metadata = {
+                "type": "full_frame",
+                "ts": ts,
+                "camera_source": "browser",
+                "lecture_id": lecture_id,
+                "idx": 0,
+                "bbox": [0, 0, w, h],
+                "faces_bboxes": [[f.x, f.y, f.w, f.h] for f in faces],
+                "faces": len(faces),
+                "frame_wh": [w, h],
+            }
+            await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
+            return {"published": 1, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "frame"}
+
+        crops = detector.crop_faces(
+            frame, faces,
+            pad_x_ratio=settings.face_pad_x_ratio,
+            pad_y_ratio=settings.face_pad_y_ratio,
+            top_extra_ratio=settings.face_top_extra_ratio,
+            bottom_extra_ratio=settings.face_bottom_extra_ratio,
+            make_square=settings.face_crop_make_square,
+        )
+        h_frame, w_frame = frame.shape[:2]
+        published = 0
+        for idx, fc in enumerate(crops):
+            crop = fc.image
+            h_crop, w_crop = crop.shape[:2]
+            jpeg = camera.encode_jpeg(crop, settings.jpeg_quality)
+            metadata = {
+                "type": "face_head_crop",
+                "ts": ts,
+                "camera_source": "browser",
+                "idx": idx,
+                "lecture_id": lecture_id,
+                "bbox": [0, 0, w_crop, h_crop],
+                "face_bbox": [fc.face_in_crop.x, fc.face_in_crop.y, fc.face_in_crop.w, fc.face_in_crop.h],
+                "original_bbox": [fc.face.x, fc.face.y, fc.face.w, fc.face.h],
+                "crop_bbox": [fc.crop_box.x, fc.crop_box.y, fc.crop_box.w, fc.crop_box.h],
+                "frame_wh": [w_frame, h_frame],
+                "crop_wh": [w_crop, h_crop],
+            }
+            await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
+            published += 1
+        return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "faces"}
+
+    async def processor() -> None:
+        """Process browser frames: detect → annotate → send back + auto-publish."""
+        nonlocal last_auto_publish, last_face_count
         while True:
-            frame, _, ts = camera.snapshot()
+            async with frame_lock:
+                frame = browser_frame
+                ts = browser_frame_ts
+
             if frame is None:
                 await asyncio.sleep(0.05)
                 continue
@@ -413,12 +478,12 @@ async def ws_stream(ws: WebSocket) -> None:
             faces = detector.detect(frame)
             current_time = asyncio.get_event_loop().time()
 
-            # Отправка аннотированного кадра
+            # Send annotated frame back to browser
             annotated = detector.annotate(frame, faces)
             jpg = camera.encode_jpeg(annotated, settings.jpeg_quality)
             await ws.send_bytes(jpg)
 
-            # Автоопубликование лиц по интервалу
+            # Auto-publish face crops to RabbitMQ
             if settings.auto_publish_interval > 0:
                 time_since_last = current_time - last_auto_publish
                 should_publish = (
@@ -429,41 +494,68 @@ async def ws_stream(ws: WebSocket) -> None:
                         or time_since_last >= settings.auto_publish_interval * 1.5
                     )
                 )
-
                 if should_publish:
                     try:
-                        result = await publish_current_faces(lecture_id)
+                        result = await _publish_faces_from_frame(frame, ts)
                         await ws.send_text(json.dumps({"type": "auto_publish", "data": result}))
                         last_auto_publish = current_time
                         last_face_count = len(faces)
                     except Exception as e:
                         print(f"Auto-publish failed: {e}")
 
-            await asyncio.sleep(send_interval)
+            await asyncio.sleep(0.03)  # ~30fps cap for processing
 
     async def receiver() -> None:
+        """Receive binary JPEG frames and text JSON commands from browser."""
+        nonlocal browser_frame, browser_frame_ts
         while True:
-            msg = await ws.receive_text()
-            try:
-                payload: dict[str, Any] = json.loads(msg)
-            except Exception:
+            msg = await ws.receive()
+            ws_type = msg.get("type", "")
+
+            # Binary message = JPEG frame from browser camera
+            if ws_type == "websocket.receive" and "bytes" in msg and msg["bytes"]:
+                raw = msg["bytes"]
+                arr = np.frombuffer(raw, dtype=np.uint8)
+                decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if decoded is not None:
+                    async with frame_lock:
+                        browser_frame = decoded
+                        browser_frame_ts = time.time()
                 continue
 
-            if payload.get("type") == "recognize_now":
+            # Text message = JSON command
+            if ws_type == "websocket.receive" and "text" in msg and msg["text"]:
                 try:
-                    result = await publish_current_faces(lecture_id)
-                    await ws.send_text(json.dumps({"type": "recognize_result", "data": result}))
-                except Exception as e:
-                    await ws.send_text(json.dumps({"type": "error", "error": str(e), "lecture_id": lecture_id}))
+                    payload: dict[str, Any] = json.loads(msg["text"])
+                except Exception:
+                    continue
 
-    task_s = asyncio.create_task(sender())
+                if payload.get("type") == "recognize_now":
+                    async with frame_lock:
+                        frame = browser_frame
+                        ts = browser_frame_ts
+                    if frame is None:
+                        await ws.send_text(json.dumps({"type": "error", "error": "no_frame_yet", "lecture_id": lecture_id}))
+                        continue
+                    try:
+                        result = await _publish_faces_from_frame(frame, ts)
+                        await ws.send_text(json.dumps({"type": "recognize_result", "data": result}))
+                    except Exception as e:
+                        await ws.send_text(json.dumps({"type": "error", "error": str(e), "lecture_id": lecture_id}))
+                continue
+
+            # WebSocket disconnect
+            if ws_type == "websocket.disconnect":
+                break
+
+    task_p = asyncio.create_task(processor())
     task_r = asyncio.create_task(receiver())
     try:
-        await asyncio.gather(task_s, task_r)
+        await asyncio.gather(task_p, task_r)
     except WebSocketDisconnect:
         pass
     finally:
-        task_s.cancel()
+        task_p.cancel()
         task_r.cancel()
 
 
