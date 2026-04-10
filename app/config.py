@@ -62,6 +62,10 @@ class Settings:
     tile_detect_overlap: float = float(os.getenv("TILE_DETECT_OVERLAP", "0.3"))
     tile_detect_nms_iou: float = float(os.getenv("TILE_DETECT_NMS_IOU", "0.4"))
     tile_detect_min_face_px: int = int(os.getenv("TILE_DETECT_MIN_FACE_PX", "20"))
+    # Тайлинг запускается только раз в N кадров (1 = каждый кадр, 3 = каждый 3-й)
+    tile_detect_every_n_frames: int = int(os.getenv("TILE_DETECT_EVERY_N_FRAMES", "3"))
+    # Ограничение FPS захвата камеры (0 = без ограничений)
+    camera_target_fps: int = int(os.getenv("CAMERA_TARGET_FPS", "0"))
 
     # RabbitMQ
     rabbitmq_url: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5673/")

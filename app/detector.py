@@ -50,6 +50,7 @@ class FaceDetector:
         tile_overlap: float = 0.3,
         tile_nms_iou: float = 0.4,
         tile_min_face_px: int = 20,
+        tile_every_n_frames: int = 1,
     ):
         self._min_confidence = float(min_confidence)
         self._model_selection = int(model_selection)
@@ -59,6 +60,8 @@ class FaceDetector:
         self._tile_overlap = max(0.0, min(0.5, tile_overlap))
         self._tile_nms_iou = tile_nms_iou
         self._tile_min_face_px = tile_min_face_px
+        self._tile_every_n_frames = max(1, tile_every_n_frames)
+        self._frame_counter = 0
 
         _mp_face = mp.solutions.face_detection
         self._detector = _mp_face.FaceDetection(
@@ -141,6 +144,11 @@ class FaceDetector:
         full_faces = self._detect_single(bgr)
 
         if not self._tile_enabled:
+            return full_faces
+
+        # Tiled detection only every N frames to reduce CPU load
+        self._frame_counter += 1
+        if self._frame_counter % self._tile_every_n_frames != 0:
             return full_faces
 
         # Tiled detection for small faces

@@ -43,12 +43,14 @@ detector = FaceDetector(
     tile_overlap=settings.tile_detect_overlap,
     tile_nms_iou=settings.tile_detect_nms_iou,
     tile_min_face_px=settings.tile_detect_min_face_px,
+    tile_every_n_frames=settings.tile_detect_every_n_frames,
 )
 
 camera = CameraWorker(
     settings.camera_source,
     detector,
     reconnect_interval=settings.camera_reconnect_interval,
+    target_fps=settings.camera_target_fps,
 )
 
 publisher = FacePublisher(
@@ -472,6 +474,7 @@ async def ws_stream(ws: WebSocket) -> None:
     async def processor() -> None:
         """Process browser frames: detect → annotate → send back + auto-publish."""
         nonlocal last_auto_publish, last_face_count
+        loop = asyncio.get_event_loop()
         while True:
             async with frame_lock:
                 frame = browser_frame
@@ -481,12 +484,15 @@ async def ws_stream(ws: WebSocket) -> None:
                 await asyncio.sleep(0.05)
                 continue
 
-            faces = detector.detect(frame)
-            current_time = asyncio.get_event_loop().time()
+            # Run blocking MediaPipe inference in thread pool to avoid freezing event loop
+            faces = await loop.run_in_executor(None, detector.detect, frame)
+            current_time = loop.time()
 
-            # Send annotated frame back to browser
+            # Annotate and encode in thread pool as well
             annotated = detector.annotate(frame, faces)
-            jpg = camera.encode_jpeg(annotated, settings.jpeg_quality)
+            jpg = await loop.run_in_executor(
+                None, camera.encode_jpeg, annotated, settings.jpeg_quality
+            )
             await ws.send_bytes(jpg)
 
             # Auto-publish face crops to RabbitMQ

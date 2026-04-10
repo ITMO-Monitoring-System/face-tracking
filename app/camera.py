@@ -29,10 +29,11 @@ class CameraWorker:
     - supports runtime camera switching via switch_source()
     """
 
-    def __init__(self, source: str, detector: FaceDetector, reconnect_interval: float = 1.0):
+    def __init__(self, source: str, detector: FaceDetector, reconnect_interval: float = 1.0, target_fps: int = 0):
         self._source_raw = source
         self._source = _parse_source(source)
         self._reconnect_interval = float(reconnect_interval)
+        self._target_fps = max(0, int(target_fps))
 
         self._cap: Optional[cv2.VideoCapture] = None
         self._detector = detector
@@ -125,6 +126,8 @@ class CameraWorker:
 
     def _loop(self) -> None:
         fail_count = 0
+        _min_interval = 1.0 / self._target_fps if self._target_fps > 0 else 0.0
+        _last_frame_time = 0.0
 
         while not self._stop.is_set():
             if self._cap is None or not self._cap.isOpened():
@@ -151,10 +154,16 @@ class CameraWorker:
 
             fail_count = 0
 
+            # FPS throttle: skip frames that arrive too fast
+            now = time.time()
+            if _min_interval > 0 and (now - _last_frame_time) < _min_interval:
+                continue
+            _last_frame_time = now
+
             with self._lock:
                 self._last_frame = frame
                 self._last_faces = []
-                self._last_ts = time.time()
+                self._last_ts = now
 
     def snapshot(self) -> Tuple[Optional[np.ndarray], List[FaceBox], float]:
         with self._lock:
