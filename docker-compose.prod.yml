@@ -42,10 +42,13 @@ services:
       RABBITMQ_EXCHANGE: "${RABBITMQ_EXCHANGE:-faces}"
       RABBITMQ_LECTURE_QUEUE_TEMPLATE: "${RABBITMQ_LECTURE_QUEUE_TEMPLATE:-faces.queue.lecture.{lecture_id}}"
       RABBITMQ_LECTURE_ROUTING_KEY_TEMPLATE: "${RABBITMQ_LECTURE_ROUTING_KEY_TEMPLATE:-lecture.{lecture_id}.face}"
-      CAMERA_SOURCE: "${CAMERA_SOURCE:-rtsp://mediamtx:8554/lecture}"
+      # Источник по умолчанию — браузерная камера (через WebSocket /ws/stream).
+      # Без этого процесс пытается подключиться к RTSP-камере и сыпет 404 в логах.
+      CAMERA_SOURCE: "${CAMERA_SOURCE:-none}"
       FPS: "${FPS:-15}"
       JPEG_QUALITY: "${JPEG_QUALITY:-80}"
-      AUTO_PUBLISH_INTERVAL: "${AUTO_PUBLISH_INTERVAL:-1.0}"
+      # Раз в 300мс публикуем кропы — раньше было 1.0 сек, что создавало ощущение "тормозит".
+      AUTO_PUBLISH_INTERVAL: "${AUTO_PUBLISH_INTERVAL:-0.3}"
       PUBLISH_MODE: "${PUBLISH_MODE:-faces}"
       FACE_PAD_Y_RATIO: "${FACE_PAD_Y_RATIO:-0.35}"
       FACE_TOP_EXTRA_RATIO: "${FACE_TOP_EXTRA_RATIO:-0.60}"
