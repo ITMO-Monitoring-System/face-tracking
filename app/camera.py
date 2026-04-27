@@ -165,11 +165,19 @@ class CameraWorker:
                 self._last_faces = []
                 self._last_ts = now
 
-    def snapshot(self) -> Tuple[Optional[np.ndarray], List[FaceBox], float]:
+    def snapshot(self, since_ts: float = 0.0) -> Tuple[Optional[np.ndarray], List[FaceBox], float]:
+        """Снимок последнего кадра.
+
+        Если since_ts > 0 и текущий ts <= since_ts — возвращаем (None, [], ts) без .copy(),
+        что экономит ~6MB на каждый «пустой» вызов на 1080p.
+        Дефолт since_ts=0.0 сохраняет старое поведение для всех существующих вызовов.
+        """
         with self._lock:
-            frame = None if self._last_frame is None else self._last_frame.copy()
-            faces = list(self._last_faces)
             ts = float(self._last_ts)
+            if self._last_frame is None or (since_ts > 0.0 and ts <= since_ts):
+                return None, [], ts
+            frame = self._last_frame.copy()
+            faces = list(self._last_faces)
         return frame, faces, ts
 
     @staticmethod

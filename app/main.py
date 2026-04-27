@@ -417,9 +417,13 @@ async def ws_stream(ws: WebSocket) -> None:
     last_auto_publish = 0.0
     last_face_count = 0
 
-    async def _publish_faces_from_frame(frame, ts: float) -> dict:
-        """Detect faces in frame and publish crops to RabbitMQ."""
-        faces = detector.detect(frame)
+    async def _publish_faces_from_frame(frame, ts: float, faces=None) -> dict:
+        """Detect faces in frame and publish crops to RabbitMQ.
+
+        Если faces передан — пропускаем повторный detect (faces уже найдены вызывающим).
+        """
+        if faces is None:
+            faces = detector.detect(frame)
         if len(faces) == 0:
             return {"published": 0, "faces": 0, "ts": ts, "lecture_id": lecture_id}
 
@@ -508,7 +512,7 @@ async def ws_stream(ws: WebSocket) -> None:
                 )
                 if should_publish:
                     try:
-                        result = await _publish_faces_from_frame(frame, ts)
+                        result = await _publish_faces_from_frame(frame, ts, faces=faces)
                         await ws.send_text(json.dumps({"type": "auto_publish", "data": result}))
                         last_auto_publish = current_time
                         last_face_count = len(faces)
