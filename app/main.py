@@ -6,6 +6,12 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+except ImportError:
+    pass
+
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -16,6 +22,7 @@ from .camera import CameraWorker
 from .config import settings
 from .detector import FaceDetector
 from .rabbitmq import FacePublisher
+from .tracker import IoUTracker
 
 app = FastAPI()
 
@@ -60,6 +67,14 @@ publisher = FacePublisher(
     lecture_routing_key_template=settings.lecture_routing_key_template,
 )
 
+# Один tracker на процесс — состояние треков переживает между кадрами.
+# При смене лекции вызывается tracker.reset() (см. lecture_start/end).
+tracker = IoUTracker(
+    iou_threshold=settings.tracker_iou_threshold,
+    republish_interval=settings.tracker_republish_interval,
+    max_age=settings.tracker_max_age,
+)
+
 
 # ──────────────────────────────────────────────
 # Pydantic-модели запросов
@@ -95,12 +110,20 @@ def _normalize_source_value(source: Any) -> str:
 async def startup() -> None:
     camera.start()
     await publisher.connect()
+    # Один общий httpx-клиент с keep-alive — переиспользует TCP/TLS-соединение
+    # при последующих POST /api/lecture/start в face-recognizing.
+    app.state.http_client = httpx.AsyncClient(
+        timeout=settings.connect_service_timeout_seconds,
+    )
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
     camera.stop()
     await publisher.close()
+    client: httpx.AsyncClient | None = getattr(app.state, "http_client", None)
+    if client is not None:
+        await client.aclose()
 
 
 # ──────────────────────────────────────────────
@@ -212,6 +235,8 @@ async def _wait_for_camera_frame(*, timeout_seconds: float) -> tuple[Any, float]
 @app.post("/api/lectures/{lecture_id}/start")
 async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None) -> dict:
     req = req or LectureStartRequest()
+    # Новая лекция — сбросить треки с предыдущей (на тот же процесс).
+    tracker.reset()
     binding = await publisher.start_lecture(
         lecture_id,
         durable=req.durable,
@@ -224,7 +249,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
     camera_warning: str | None = None
     try:
         frame, ts = await _wait_for_camera_frame(timeout_seconds=settings.lecture_start_ready_timeout_seconds)
-        jpeg = camera.encode_jpeg(frame, settings.jpeg_quality)
+        jpeg = camera.encode_jpeg(frame, settings.jpeg_quality_crops)
         await publisher.publish_face_jpeg(
             lecture_id,
             jpeg,
@@ -240,45 +265,45 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         camera_warning = f"camera_not_ready: {e}"
 
     try:
-        async with httpx.AsyncClient(timeout=settings.connect_service_timeout_seconds) as client:
-            in_amqp_url = settings.connect_service_in_amqp_url
-            parsed = urlparse(in_amqp_url)
-            in_host = parsed.hostname
+        client: httpx.AsyncClient = app.state.http_client
+        in_amqp_url = settings.connect_service_in_amqp_url
+        parsed = urlparse(in_amqp_url)
+        in_host = parsed.hostname
 
-            if in_host in {"rabbitmq_face_tracking", "localhost", "127.0.0.1"}:
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        "connect_service_in_amqp_url_not_reachable: "
-                        f"in_amqp_url={in_amqp_url}. "
-                        "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port "
-                        "(e.g. amqp://guest:guest@projctviscon.vps.webdock.cloud:5673/)."
-                    ),
-                )
+        if in_host in {"rabbitmq_face_tracking", "localhost", "127.0.0.1"}:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "connect_service_in_amqp_url_not_reachable: "
+                    f"in_amqp_url={in_amqp_url}. "
+                    "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port "
+                    "(e.g. amqp://guest:guest@projctviscon.vps.webdock.cloud:5673/)."
+                ),
+            )
 
-            try:
-                lecture_id_for_connect = int(lecture_id)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="lecture_id_must_be_integer")
+        try:
+            lecture_id_for_connect = int(lecture_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="lecture_id_must_be_integer")
 
-            payload = {
-                "lecture_id": lecture_id_for_connect,
-                "in_amqp_url": in_amqp_url,
-                "in_queue": binding.queue_name,
-                "threshold": settings.connect_service_threshold,
-            }
+        payload = {
+            "lecture_id": lecture_id_for_connect,
+            "in_amqp_url": in_amqp_url,
+            "in_queue": binding.queue_name,
+            "threshold": settings.connect_service_threshold,
+        }
 
-            resp = await client.post(settings.connect_service_url, json=payload)
+        resp = await client.post(settings.connect_service_url, json=payload)
 
-            if resp.is_error:
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        f"connect_service_error: endpoint={settings.connect_service_url}, "
-                        f"in_amqp_url={in_amqp_url}, in_queue={binding.queue_name}; "
-                        f"HTTP {resp.status_code}: {resp.text}"
-                    ),
-                )
+        if resp.is_error:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"connect_service_error: endpoint={settings.connect_service_url}, "
+                    f"in_amqp_url={in_amqp_url}, in_queue={binding.queue_name}; "
+                    f"HTTP {resp.status_code}: {resp.text}"
+                ),
+            )
     except HTTPException:
         await publisher.end_lecture(lecture_id)
         raise
@@ -327,10 +352,28 @@ async def publish_current_faces(lecture_id: str) -> dict:
     if len(faces) == 0:
         return {"published": 0, "faces": 0, "ts": ts, "lecture_id": lecture_id}
 
+    # Трекинг: фильтруем лица, которые недавно публиковались.
+    if settings.tracker_enabled and getattr(settings, "publish_mode", "faces") != "frame":
+        tracked = tracker.update(faces, ts=ts)
+        face_indices_to_publish = [i for i, tf in enumerate(tracked) if tf.should_publish]
+        track_ids_published = [tracked[i].track_id for i in face_indices_to_publish]
+        if not face_indices_to_publish:
+            return {
+                "published": 0,
+                "faces": len(faces),
+                "tracked": len(tracked),
+                "ts": ts,
+                "lecture_id": lecture_id,
+                "skipped_by_tracker": True,
+            }
+        faces = [faces[i] for i in face_indices_to_publish]
+    else:
+        track_ids_published = []
+
     # TEST MODE: публикуем полный кадр
     if getattr(settings, "publish_mode", "faces") == "frame":
         h, w = frame.shape[:2]
-        jpeg = camera.encode_jpeg(frame, settings.jpeg_quality)
+        jpeg = camera.encode_jpeg(frame, settings.jpeg_quality_crops)
 
         metadata = {
             "type": "full_frame",
@@ -365,7 +408,7 @@ async def publish_current_faces(lecture_id: str) -> dict:
         crop = fc.image
         h_crop, w_crop = crop.shape[:2]
 
-        jpeg = camera.encode_jpeg(crop, settings.jpeg_quality)
+        jpeg = camera.encode_jpeg(crop, settings.jpeg_quality_crops)
 
         metadata = {
             "type": "face_head_crop",
@@ -384,6 +427,8 @@ async def publish_current_faces(lecture_id: str) -> dict:
         await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
         published += 1
 
+    if track_ids_published:
+        tracker.mark_published(track_ids_published, ts=ts)
     return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "faces"}
 
 
@@ -427,9 +472,29 @@ async def ws_stream(ws: WebSocket) -> None:
         if len(faces) == 0:
             return {"published": 0, "faces": 0, "ts": ts, "lecture_id": lecture_id}
 
+        # Трекинг: фильтруем лица, которые недавно публиковались (повторное распознавание
+        # того же человека не нужно). На полном кадре (publish_mode=frame) фильтрация не
+        # применяется — там публикуется один JPEG с метаданными всех лиц.
+        if settings.tracker_enabled and getattr(settings, "publish_mode", "faces") != "frame":
+            tracked = tracker.update(faces, ts=ts)
+            face_indices_to_publish = [i for i, tf in enumerate(tracked) if tf.should_publish]
+            track_ids_published = [tracked[i].track_id for i in face_indices_to_publish]
+            if not face_indices_to_publish:
+                return {
+                    "published": 0,
+                    "faces": len(faces),
+                    "tracked": len(tracked),
+                    "ts": ts,
+                    "lecture_id": lecture_id,
+                    "skipped_by_tracker": True,
+                }
+            faces = [faces[i] for i in face_indices_to_publish]
+        else:
+            track_ids_published = []
+
         if getattr(settings, "publish_mode", "faces") == "frame":
             h, w = frame.shape[:2]
-            jpeg = camera.encode_jpeg(frame, settings.jpeg_quality)
+            jpeg = camera.encode_jpeg(frame, settings.jpeg_quality_crops)
             metadata = {
                 "type": "full_frame",
                 "ts": ts,
@@ -457,7 +522,7 @@ async def ws_stream(ws: WebSocket) -> None:
         for idx, fc in enumerate(crops):
             crop = fc.image
             h_crop, w_crop = crop.shape[:2]
-            jpeg = camera.encode_jpeg(crop, settings.jpeg_quality)
+            jpeg = camera.encode_jpeg(crop, settings.jpeg_quality_crops)
             metadata = {
                 "type": "face_head_crop",
                 "ts": ts,
@@ -473,6 +538,8 @@ async def ws_stream(ws: WebSocket) -> None:
             }
             await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
             published += 1
+        if track_ids_published:
+            tracker.mark_published(track_ids_published, ts=ts)
         return {"published": published, "faces": len(faces), "ts": ts, "lecture_id": lecture_id, "mode": "faces"}
 
     async def processor() -> None:
@@ -492,12 +559,24 @@ async def ws_stream(ws: WebSocket) -> None:
             faces = await loop.run_in_executor(None, detector.detect, frame)
             current_time = loop.time()
 
-            # Annotate and encode in thread pool as well
-            annotated = detector.annotate(frame, faces)
-            jpg = await loop.run_in_executor(
-                None, camera.encode_jpeg, annotated, settings.jpeg_quality
-            )
-            await ws.send_bytes(jpg)
+            # Отправляем не annotated JPEG, а нормализованные bbox-ы — браузер рисует
+            # их поверх собственного <video>. Экономит ~100KB/кадр на сети и encode_jpeg на CPU.
+            h_frame, w_frame = frame.shape[:2]
+            faces_payload = [
+                [
+                    round(f.x / w_frame, 4) if w_frame else 0.0,
+                    round(f.y / h_frame, 4) if h_frame else 0.0,
+                    round(f.w / w_frame, 4) if w_frame else 0.0,
+                    round(f.h / h_frame, 4) if h_frame else 0.0,
+                ]
+                for f in faces
+            ]
+            await ws.send_text(json.dumps({
+                "type": "faces",
+                "ts": ts,
+                "faces": faces_payload,
+                "frame_wh": [w_frame, h_frame],
+            }))
 
             # Auto-publish face crops to RabbitMQ
             if settings.auto_publish_interval > 0:

@@ -27,6 +27,12 @@ class Settings:
 
     fps: int = int(os.getenv("FPS", "30"))
     jpeg_quality: int = int(os.getenv("JPEG_QUALITY", "80"))
+    # Раздельные quality:
+    # - crops — JPEG лиц/кадров в RabbitMQ для face-recognizing (можно ниже,
+    #   ArcFace ресайзит до 112×112). Дефолт = JPEG_QUALITY (back-compat).
+    # - stream — аннотированный кадр в WebSocket браузера (видит человек).
+    jpeg_quality_crops: int = int(os.getenv("JPEG_QUALITY_CROPS", os.getenv("JPEG_QUALITY", "70")))
+    jpeg_quality_stream: int = int(os.getenv("JPEG_QUALITY_STREAM", os.getenv("JPEG_QUALITY", "80")))
 
     # Publish mode:
     # - "faces" -> send cropped faces (default)
@@ -66,6 +72,16 @@ class Settings:
     tile_detect_every_n_frames: int = int(os.getenv("TILE_DETECT_EVERY_N_FRAMES", "3"))
     # Ограничение FPS захвата камеры (0 = без ограничений)
     camera_target_fps: int = int(os.getenv("CAMERA_TARGET_FPS", "0"))
+
+    # IoU-tracker между кадрами: один человек публикуется в RabbitMQ не чаще, чем
+    # tracker_republish_interval секунд. Отключение — фильтрация снимается, все
+    # видимые лица публикуются на каждом auto_publish_interval как раньше.
+    tracker_enabled: bool = os.getenv("TRACKER_ENABLED", "true").strip().lower() in {
+        "1", "true", "yes", "y", "on",
+    }
+    tracker_iou_threshold: float = float(os.getenv("TRACKER_IOU_THRESHOLD", "0.3"))
+    tracker_republish_interval: float = float(os.getenv("TRACKER_REPUBLISH_INTERVAL", "30.0"))
+    tracker_max_age: float = float(os.getenv("TRACKER_MAX_AGE", "5.0"))
 
     # RabbitMQ
     rabbitmq_url: str = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5673/")

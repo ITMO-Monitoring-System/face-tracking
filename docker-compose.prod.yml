@@ -49,6 +49,16 @@ services:
       CAMERA_SOURCE: "${CAMERA_SOURCE:-none}"
       FPS: "${FPS:-15}"
       JPEG_QUALITY: "${JPEG_QUALITY:-80}"
+      # Кропы → face-recognizing (ArcFace ресайзит до 112×112, можно снизить).
+      JPEG_QUALITY_CROPS: "${JPEG_QUALITY_CROPS:-70}"
+      # Аннотированный стрим в браузер (видит человек).
+      JPEG_QUALITY_STREAM: "${JPEG_QUALITY_STREAM:-80}"
+      # Бинарный AMQP body (raw JPEG + headers) вместо base64+JSON. face-recognizing
+      # умеет оба формата, можно безопасно держать "1". Откат через "0".
+      BINARY_AMQP: "${BINARY_AMQP:-1}"
+      # IoU-tracker между кадрами: один человек не публикуется чаще раз в 30 сек.
+      TRACKER_ENABLED: "${TRACKER_ENABLED:-true}"
+      TRACKER_REPUBLISH_INTERVAL: "${TRACKER_REPUBLISH_INTERVAL:-30.0}"
       # Раз в 300мс публикуем кропы — раньше было 1.0 сек, что создавало ощущение "тормозит".
       AUTO_PUBLISH_INTERVAL: "${AUTO_PUBLISH_INTERVAL:-0.3}"
       PUBLISH_MODE: "${PUBLISH_MODE:-faces}"

@@ -3,11 +3,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import aio_pika
+
+# По умолчанию используем бинарный формат (raw JPEG в body, метаданные в headers).
+# Старый JSON+base64 формат можно вернуть через BINARY_AMQP=0 — он остаётся как fallback.
+_BINARY_AMQP = os.getenv("BINARY_AMQP", "1") == "1"
 
 
 @dataclass(frozen=True)
@@ -141,18 +146,40 @@ class FacePublisher:
         if not binding:
             raise RuntimeError(f"lecture not started: {lecture_id}")
 
-        image_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+        request_id = str(uuid.uuid4())
 
+        if _BINARY_AMQP:
+            # Бинарный формат: raw JPEG в body, метаданные в headers.
+            # Списки и dict-ы сериализуем в JSON-строки, чтобы влезли в AMQP headers.
+            headers: dict[str, Any] = {
+                "request_id": request_id,
+                "lecture_id": lecture_id,
+            }
+            if metadata:
+                for k, v in metadata.items():
+                    if isinstance(v, (list, tuple, dict)):
+                        headers[k] = json.dumps(v)
+                    else:
+                        headers[k] = v
+            msg = aio_pika.Message(
+                body=jpeg_bytes,
+                content_type="image/jpeg",
+                headers=headers,
+                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            )
+            await self._exchange.publish(msg, routing_key=binding.routing_key)
+            return
+
+        # Legacy: JSON+base64 (back-compat для старых консьюмеров).
+        image_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
         message_data: dict[str, Any] = {
-            "request_id": str(uuid.uuid4()),
+            "request_id": request_id,
             "image_b64": image_b64,
             "lecture_id": lecture_id,
         }
         if metadata:
             message_data.update(metadata)
-
         json_body = json.dumps(message_data).encode("utf-8")
-
         msg = aio_pika.Message(
             body=json_body,
             content_type="application/json",
