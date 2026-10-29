@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from .detector import FaceBox, FaceDetector
+from .logging_utils import event
 
 
 def _parse_source(src: str) -> Union[int, str]:
@@ -78,7 +79,7 @@ class CameraWorker:
         Останавливает текущий поток захвата и перезапускает с новым источником.
         Если new_source == "none" — камера просто останавливается.
         """
-        print(f"Switching camera: {self._source_raw!r} -> {new_source!r}")
+        event("camera_source_switch")
 
         # Останавливаем текущий поток
         self._stop.set()
@@ -128,21 +129,30 @@ class CameraWorker:
         fail_count = 0
         _min_interval = 1.0 / self._target_fps if self._target_fps > 0 else 0.0
         _last_frame_time = 0.0
+        last_counts = time.monotonic()
+        counts = {"frames_received": 0, "frames_kept": 0, "frames_dropped": 0, "read_failures": 0}
 
         while not self._stop.is_set():
+            if time.monotonic() - last_counts >= 30:
+                event("camera_capture_counts", **counts)
+                counts.update({key: 0 for key in counts})
+                last_counts = time.monotonic()
             if self._cap is None or not self._cap.isOpened():
-                print(f"Opening capture: {self._source}")
+                event("camera_opening")
                 self._cap = self._open_capture()
                 if self._cap is None:
-                    print(f"Failed to open capture, retrying in {self._reconnect_interval}s")
+                    event("camera_open_failed", retry_seconds=self._reconnect_interval)
                     time.sleep(self._reconnect_interval)
                     continue
                 fail_count = 0
+                event("camera_opened")
 
             ok, frame = self._cap.read()
             if not ok or frame is None:
                 fail_count += 1
-                print(f"Failed to read frame ({fail_count})")
+                counts["read_failures"] += 1
+                if fail_count == 1 or fail_count % 100 == 0:
+                    event("camera_read_failed", consecutive_failures=fail_count)
                 time.sleep(0.05)
                 if fail_count >= 300:
                     try:
@@ -153,17 +163,22 @@ class CameraWorker:
                 continue
 
             fail_count = 0
+            counts["frames_received"] += 1
 
             # FPS throttle: skip frames that arrive too fast
             now = time.time()
             if _min_interval > 0 and (now - _last_frame_time) < _min_interval:
+                counts["frames_dropped"] += 1
                 continue
             _last_frame_time = now
+            counts["frames_kept"] += 1
 
             with self._lock:
                 self._last_frame = frame
                 self._last_faces = []
                 self._last_ts = now
+
+        event("camera_capture_counts", **counts)
 
     def snapshot(self, since_ts: float = 0.0) -> Tuple[Optional[np.ndarray], List[FaceBox], float]:
         """Снимок последнего кадра.

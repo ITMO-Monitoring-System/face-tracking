@@ -113,6 +113,7 @@ class Settings:
     connect_service_out_queue: str | None = os.getenv("CONNECT_SERVICE_OUT_QUEUE")
 
     lecture_start_ready_timeout_seconds: float = float(os.getenv("LECTURE_START_READY_TIMEOUT_SECONDS", "15.0"))
+    lecture_logging_socket: str | None = os.getenv("LECTURE_LOGGING_SOCKET")
 
 
 settings = Settings()
