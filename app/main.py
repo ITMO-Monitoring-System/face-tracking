@@ -23,6 +23,10 @@ from .config import settings
 from .detector import FaceDetector
 from .rabbitmq import FacePublisher
 from .tracker import IoUTracker
+from .logging_utils import setup as setup_logging, event
+from .lecture_logging import control as control_lecture_archive
+
+setup_logging()
 
 app = FastAPI()
 
@@ -200,7 +204,7 @@ async def set_camera_source(req: CameraSourceRequest) -> dict:
     try:
         await loop.run_in_executor(None, camera.switch_source, requested_source)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to switch camera: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to switch camera: {type(e).__name__}")
 
     return {
         "ok": True,
@@ -232,18 +236,34 @@ async def _wait_for_camera_frame(*, timeout_seconds: float) -> tuple[Any, float]
         await asyncio.sleep(0.05)
 
 
+async def _stop_archive_after_failed_start(lecture_id: str) -> None:
+    try:
+        await control_lecture_archive(settings.lecture_logging_socket, "stop", lecture_id)
+    except Exception as error:
+        event("lecture_archive_rollback_failed", lecture_id, error_type=type(error).__name__)
+
+
 @app.post("/api/lectures/{lecture_id}/start")
 async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None) -> dict:
     req = req or LectureStartRequest()
+    try:
+        archive = await control_lecture_archive(settings.lecture_logging_socket, "start", lecture_id)
+    except Exception as e:
+        event("lecture_archive_start_failed", lecture_id, error_type=type(e).__name__)
+        raise HTTPException(status_code=503, detail="lecture_archive_start_failed") from e
     # Новая лекция — сбросить треки с предыдущей (на тот же процесс).
     tracker.reset()
-    binding = await publisher.start_lecture(
-        lecture_id,
-        durable=req.durable,
-        auto_delete=req.auto_delete,
-        expires_ms=req.expires_ms,
-        message_ttl_ms=req.message_ttl_ms,
-    )
+    try:
+        binding = await publisher.start_lecture(
+            lecture_id,
+            durable=req.durable,
+            auto_delete=req.auto_delete,
+            expires_ms=req.expires_ms,
+            message_ttl_ms=req.message_ttl_ms,
+        )
+    except Exception:
+        await _stop_archive_after_failed_start(lecture_id)
+        raise
 
     probe_sent = False
     camera_warning: str | None = None
@@ -256,13 +276,13 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
             metadata={
                 "type": "probe",
                 "ts": ts,
-                "camera_source": camera.source,
+                "camera_source": "server",
                 "lecture_id": lecture_id,
             },
         )
         probe_sent = True
     except Exception as e:
-        camera_warning = f"camera_not_ready: {e}"
+        camera_warning = f"camera_not_ready: {type(e).__name__}"
 
     try:
         client: httpx.AsyncClient = app.state.http_client
@@ -275,9 +295,7 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
                 status_code=500,
                 detail=(
                     "connect_service_in_amqp_url_not_reachable: "
-                    f"in_amqp_url={in_amqp_url}. "
-                    "Set CONNECT_SERVICE_IN_AMQP_URL to a public IP/domain and exposed port "
-                    "(e.g. amqp://guest:guest@projctviscon.vps.webdock.cloud:5673/)."
+                    "Check CONNECT_SERVICE_IN_AMQP_URL host and port."
                 ),
             )
 
@@ -299,25 +317,25 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    f"connect_service_error: endpoint={settings.connect_service_url}, "
-                    f"in_amqp_url={in_amqp_url}, in_queue={binding.queue_name}; "
-                    f"HTTP {resp.status_code}: {resp.text}"
+                    f"connect_service_error: HTTP {resp.status_code}"
                 ),
             )
     except HTTPException:
         await publisher.end_lecture(lecture_id)
+        await _stop_archive_after_failed_start(lecture_id)
         raise
     except Exception as e:
         await publisher.end_lecture(lecture_id)
+        await _stop_archive_after_failed_start(lecture_id)
         raise HTTPException(
             status_code=502,
             detail=(
-                f"connect_service_error: endpoint={settings.connect_service_url}, "
-                f"in_amqp_url={settings.connect_service_in_amqp_url}, "
-                f"in_queue={binding.queue_name}; {e}"
+                f"connect_service_error: {type(e).__name__}"
             ),
         )
 
+    event("lecture_started", lecture_id, probe_sent=probe_sent,
+          archive_session_id=archive["session_id"] if archive else None)
     return {
         "ok": True,
         "lecture_id": lecture_id,
@@ -328,14 +346,30 @@ async def start_lecture(lecture_id: str, req: LectureStartRequest | None = None)
         "camera_ready": probe_sent,
         "camera_source": _normalize_source_value(camera.source),
         "warning": camera_warning,
+        "archive_session_id": archive["session_id"] if archive else None,
     }
 
 
 @app.post("/api/lectures/{lecture_id}/end")
 async def end_lecture(lecture_id: str, req: LectureEndRequest | None = None) -> dict:
     req = req or LectureEndRequest()
-    deleted = await publisher.end_lecture(lecture_id, if_unused=req.if_unused, if_empty=req.if_empty)
-    return {"ok": True, "lecture_id": lecture_id, "deleted": deleted}
+    try:
+        deleted = await publisher.end_lecture(lecture_id, if_unused=req.if_unused, if_empty=req.if_empty)
+    except Exception as e:
+        event("lecture_stop_failed", lecture_id, error_type=type(e).__name__)
+        try:
+            await control_lecture_archive(settings.lecture_logging_socket, "stop", lecture_id)
+        except Exception as archive_error:
+            event("lecture_archive_stop_failed", lecture_id, error_type=type(archive_error).__name__)
+        raise HTTPException(status_code=502, detail="lecture_stop_failed") from e
+    event("lecture_stopped", lecture_id, deleted=deleted)
+    try:
+        archive = await control_lecture_archive(settings.lecture_logging_socket, "stop", lecture_id)
+    except Exception as e:
+        event("lecture_archive_stop_failed", lecture_id, error_type=type(e).__name__)
+        raise HTTPException(status_code=503, detail="lecture_archive_stop_failed") from e
+    return {"ok": True, "lecture_id": lecture_id, "deleted": deleted,
+            "archive_session_id": archive["session_id"] if archive else None}
 
 
 # ──────────────────────────────────────────────
@@ -378,7 +412,7 @@ async def publish_current_faces(lecture_id: str) -> dict:
         metadata = {
             "type": "full_frame",
             "ts": ts,
-            "camera_source": camera.source,
+            "camera_source": "server",
             "lecture_id": lecture_id,
             "idx": 0,
             "bbox": [0, 0, w, h],
@@ -413,7 +447,7 @@ async def publish_current_faces(lecture_id: str) -> dict:
         metadata = {
             "type": "face_head_crop",
             "ts": ts,
-            "camera_source": camera.source,
+            "camera_source": "server",
             "idx": idx,
             "lecture_id": lecture_id,
             "bbox": [0, 0, w_crop, h_crop],
@@ -454,9 +488,14 @@ async def ws_stream(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
 
+    event("camera_stream_opened", lecture_id)
+    stats = {"frames_received": 0, "frames_processed": 0, "frames_dropped": 0,
+             "faces_detected": 0, "frames_without_face": 0}
+
     # Shared state for browser-camera mode
     browser_frame = None  # latest decoded frame from browser
     browser_frame_ts: float = 0.0
+    frame_sequence = 0
     frame_lock = asyncio.Lock()
 
     last_auto_publish = 0.0
@@ -546,10 +585,18 @@ async def ws_stream(ws: WebSocket) -> None:
         """Process browser frames: detect → annotate → send back + auto-publish."""
         nonlocal last_auto_publish, last_face_count
         loop = asyncio.get_event_loop()
+        last_stats = loop.time()
+        last_processed_sequence = 0
         while True:
             async with frame_lock:
                 frame = browser_frame
                 ts = browser_frame_ts
+                sequence = frame_sequence
+
+            if loop.time() - last_stats >= 30:
+                event("camera_frame_counts", lecture_id, **stats)
+                stats.update({key: 0 for key in stats})
+                last_stats = loop.time()
 
             if frame is None:
                 await asyncio.sleep(0.05)
@@ -558,6 +605,12 @@ async def ws_stream(ws: WebSocket) -> None:
             # Run blocking MediaPipe inference in thread pool to avoid freezing event loop
             faces = await loop.run_in_executor(None, detector.detect, frame)
             current_time = loop.time()
+            if sequence > last_processed_sequence:
+                stats["frames_dropped"] += sequence - last_processed_sequence - 1
+                stats["frames_processed"] += 1
+                stats["faces_detected"] += len(faces)
+                stats["frames_without_face"] += int(not faces)
+                last_processed_sequence = sequence
 
             # Отправляем не annotated JPEG, а нормализованные bbox-ы — браузер рисует
             # их поверх собственного <video>. Экономит ~100KB/кадр на сети и encode_jpeg на CPU.
@@ -596,13 +649,13 @@ async def ws_stream(ws: WebSocket) -> None:
                         last_auto_publish = current_time
                         last_face_count = len(faces)
                     except Exception as e:
-                        print(f"Auto-publish failed: {e}")
+                        event("auto_publish_failed", lecture_id, error_type=type(e).__name__)
 
             await asyncio.sleep(0.03)  # ~30fps cap for processing
 
     async def receiver() -> None:
         """Receive binary JPEG frames and text JSON commands from browser."""
-        nonlocal browser_frame, browser_frame_ts
+        nonlocal browser_frame, browser_frame_ts, frame_sequence
         while True:
             msg = await ws.receive()
             ws_type = msg.get("type", "")
@@ -616,6 +669,8 @@ async def ws_stream(ws: WebSocket) -> None:
                     async with frame_lock:
                         browser_frame = decoded
                         browser_frame_ts = time.time()
+                        frame_sequence += 1
+                        stats["frames_received"] += 1
                 continue
 
             # Text message = JSON command
@@ -636,7 +691,8 @@ async def ws_stream(ws: WebSocket) -> None:
                         result = await _publish_faces_from_frame(frame, ts)
                         await ws.send_text(json.dumps({"type": "recognize_result", "data": result}))
                     except Exception as e:
-                        await ws.send_text(json.dumps({"type": "error", "error": str(e), "lecture_id": lecture_id}))
+                        event("manual_publish_failed", lecture_id, error_type=type(e).__name__)
+                        await ws.send_text(json.dumps({"type": "error", "error": "publish_failed", "lecture_id": lecture_id}))
                 continue
 
             # WebSocket disconnect
@@ -650,6 +706,8 @@ async def ws_stream(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        event("camera_frame_counts", lecture_id, **stats)
+        event("camera_stream_closed", lecture_id)
         task_p.cancel()
         task_r.cancel()
 

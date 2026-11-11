@@ -28,6 +28,8 @@ jobs:
           python-version: '3.11'
       - name: Check Python syntax
         run: python -m compileall -q app
+      - name: Check safe logging format
+        run: python -m unittest discover -s tests -p 'test_logging_utils.py'
 
   image:
     name: Build and verify image

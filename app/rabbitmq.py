@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import uuid
+from .logging_utils import event
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,7 +48,11 @@ class FacePublisher:
         self._lock = asyncio.Lock()
 
     async def connect(self) -> None:
-        self._conn = await aio_pika.connect_robust(self._url)
+        try:
+            self._conn = await aio_pika.connect_robust(self._url)
+        except Exception as exc:
+            event("rabbit_connection_failed", error_type=type(exc).__name__)
+            raise RuntimeError("rabbit_connection_failed") from None
         self._channel = await self._conn.channel()
         await self._channel.set_qos(prefetch_count=50)
 
@@ -114,6 +119,7 @@ class FacePublisher:
                 queue=queue,
             )
             self._bindings[lecture_id] = binding
+            event("tracking_queue_started", lecture_id)
             return binding
 
     async def end_lecture(self, lecture_id: str, *, if_unused: bool = False, if_empty: bool = False) -> bool:
@@ -136,6 +142,7 @@ class FacePublisher:
         except Exception:
             deleted_ok = False
 
+        event("tracking_queue_stopped", lecture_id, deleted=deleted_ok)
         return deleted_ok
 
     async def publish_face_jpeg(self, lecture_id: str, jpeg_bytes: bytes, metadata: dict | None) -> None:
@@ -157,6 +164,8 @@ class FacePublisher:
             }
             if metadata:
                 for k, v in metadata.items():
+                    if k in {"request_id", "lecture_id", "image_b64"}:
+                        continue
                     if isinstance(v, (list, tuple, dict)):
                         headers[k] = json.dumps(v)
                     else:
@@ -167,7 +176,12 @@ class FacePublisher:
                 headers=headers,
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             )
-            await self._exchange.publish(msg, routing_key=binding.routing_key)
+            try:
+                await self._exchange.publish(msg, routing_key=binding.routing_key)
+                event("crop_published", lecture_id, request_id=request_id, bytes=len(jpeg_bytes), outcome="queued")
+            except Exception as exc:
+                event("crop_publish_failed", lecture_id, request_id=request_id, error_type=type(exc).__name__)
+                raise RuntimeError("crop_publish_failed") from None
             return
 
         # Legacy: JSON+base64 (back-compat для старых консьюмеров).
@@ -178,7 +192,7 @@ class FacePublisher:
             "lecture_id": lecture_id,
         }
         if metadata:
-            message_data.update(metadata)
+            message_data.update({k: v for k, v in metadata.items() if k not in {"request_id", "lecture_id", "image_b64"}})
         json_body = json.dumps(message_data).encode("utf-8")
         msg = aio_pika.Message(
             body=json_body,
@@ -186,4 +200,9 @@ class FacePublisher:
             headers={"lecture_id": lecture_id},
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
         )
-        await self._exchange.publish(msg, routing_key=binding.routing_key)
+        try:
+            await self._exchange.publish(msg, routing_key=binding.routing_key)
+            event("crop_published", lecture_id, request_id=request_id, bytes=len(jpeg_bytes), outcome="queued")
+        except Exception as exc:
+            event("crop_publish_failed", lecture_id, request_id=request_id, error_type=type(exc).__name__)
+            raise RuntimeError("crop_publish_failed") from None
