@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from typing import Any
 from urllib.parse import urlparse
 
@@ -457,6 +458,8 @@ async def publish_current_faces(lecture_id: str) -> dict:
             "frame_wh": [w_frame, h_frame],
             "crop_wh": [w_crop, h_crop],
         }
+        if track_ids_published:
+            metadata["track_id"] = track_ids_published[idx]
 
         await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
         published += 1
@@ -488,9 +491,11 @@ async def ws_stream(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
 
-    event("camera_stream_opened", lecture_id)
-    stats = {"frames_received": 0, "frames_processed": 0, "frames_dropped": 0,
-             "faces_detected": 0, "frames_without_face": 0}
+    stream_id = uuid.uuid4().hex[:12]
+    event("camera_stream_opened", lecture_id, stream_id=stream_id)
+    stats = {"frames_received": 0, "bytes_received": 0, "frames_processed": 0,
+             "frames_dropped": 0, "detect_passes": 0, "faces_detected": 0,
+             "frames_without_face": 0}
 
     # Shared state for browser-camera mode
     browser_frame = None  # latest decoded frame from browser
@@ -501,7 +506,7 @@ async def ws_stream(ws: WebSocket) -> None:
     last_auto_publish = 0.0
     last_face_count = 0
 
-    async def _publish_faces_from_frame(frame, ts: float, faces=None) -> dict:
+    async def _publish_faces_from_frame(frame, ts: float, faces=None, sequence: int | None = None) -> dict:
         """Detect faces in frame and publish crops to RabbitMQ.
 
         Если faces передан — пропускаем повторный detect (faces уже найдены вызывающим).
@@ -538,6 +543,8 @@ async def ws_stream(ws: WebSocket) -> None:
                 "type": "full_frame",
                 "ts": ts,
                 "camera_source": "browser",
+                "stream_id": stream_id,
+                "frame_sequence": sequence,
                 "lecture_id": lecture_id,
                 "idx": 0,
                 "bbox": [0, 0, w, h],
@@ -566,6 +573,8 @@ async def ws_stream(ws: WebSocket) -> None:
                 "type": "face_head_crop",
                 "ts": ts,
                 "camera_source": "browser",
+                "stream_id": stream_id,
+                "frame_sequence": sequence,
                 "idx": idx,
                 "lecture_id": lecture_id,
                 "bbox": [0, 0, w_crop, h_crop],
@@ -575,6 +584,8 @@ async def ws_stream(ws: WebSocket) -> None:
                 "frame_wh": [w_frame, h_frame],
                 "crop_wh": [w_crop, h_crop],
             }
+            if track_ids_published:
+                metadata["track_id"] = track_ids_published[idx]
             await publisher.publish_face_jpeg(lecture_id, jpeg, metadata=metadata)
             published += 1
         if track_ids_published:
@@ -594,7 +605,11 @@ async def ws_stream(ws: WebSocket) -> None:
                 sequence = frame_sequence
 
             if loop.time() - last_stats >= 30:
-                event("camera_frame_counts", lecture_id, **stats)
+                frame_wh = [frame.shape[1], frame.shape[0]] if frame is not None else None
+                event("camera_frame_counts", lecture_id,
+                      stream_id=stream_id,
+                      window_seconds=round(loop.time() - last_stats, 2),
+                      frame_wh=frame_wh, **stats)
                 stats.update({key: 0 for key in stats})
                 last_stats = loop.time()
 
@@ -604,6 +619,7 @@ async def ws_stream(ws: WebSocket) -> None:
 
             # Run blocking MediaPipe inference in thread pool to avoid freezing event loop
             faces = await loop.run_in_executor(None, detector.detect, frame)
+            stats["detect_passes"] += 1
             current_time = loop.time()
             if sequence > last_processed_sequence:
                 stats["frames_dropped"] += sequence - last_processed_sequence - 1
@@ -644,7 +660,7 @@ async def ws_stream(ws: WebSocket) -> None:
                 )
                 if should_publish:
                     try:
-                        result = await _publish_faces_from_frame(frame, ts, faces=faces)
+                        result = await _publish_faces_from_frame(frame, ts, faces=faces, sequence=sequence)
                         await ws.send_text(json.dumps({"type": "auto_publish", "data": result}))
                         last_auto_publish = current_time
                         last_face_count = len(faces)
@@ -671,6 +687,7 @@ async def ws_stream(ws: WebSocket) -> None:
                         browser_frame_ts = time.time()
                         frame_sequence += 1
                         stats["frames_received"] += 1
+                        stats["bytes_received"] += len(raw)
                 continue
 
             # Text message = JSON command
@@ -684,11 +701,12 @@ async def ws_stream(ws: WebSocket) -> None:
                     async with frame_lock:
                         frame = browser_frame
                         ts = browser_frame_ts
+                        sequence = frame_sequence
                     if frame is None:
                         await ws.send_text(json.dumps({"type": "error", "error": "no_frame_yet", "lecture_id": lecture_id}))
                         continue
                     try:
-                        result = await _publish_faces_from_frame(frame, ts)
+                        result = await _publish_faces_from_frame(frame, ts, sequence=sequence)
                         await ws.send_text(json.dumps({"type": "recognize_result", "data": result}))
                     except Exception as e:
                         event("manual_publish_failed", lecture_id, error_type=type(e).__name__)
@@ -706,8 +724,10 @@ async def ws_stream(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        event("camera_frame_counts", lecture_id, **stats)
-        event("camera_stream_closed", lecture_id)
+        event("camera_frame_counts", lecture_id, stream_id=stream_id,
+              frame_wh=[browser_frame.shape[1], browser_frame.shape[0]] if browser_frame is not None else None,
+              **stats)
+        event("camera_stream_closed", lecture_id, stream_id=stream_id)
         task_p.cancel()
         task_r.cancel()
 

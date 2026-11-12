@@ -154,6 +154,10 @@ class FacePublisher:
             raise RuntimeError(f"lecture not started: {lecture_id}")
 
         request_id = str(uuid.uuid4())
+        log_fields = {key: metadata[key] for key in
+                      ("type", "camera_source", "frame_wh", "crop_wh", "idx", "track_id",
+                       "stream_id", "frame_sequence")
+                      if metadata and key in metadata}
 
         if _BINARY_AMQP:
             # Бинарный формат: raw JPEG в body, метаданные в headers.
@@ -178,9 +182,11 @@ class FacePublisher:
             )
             try:
                 await self._exchange.publish(msg, routing_key=binding.routing_key)
-                event("crop_published", lecture_id, request_id=request_id, bytes=len(jpeg_bytes), outcome="queued")
+                event("crop_published", lecture_id, request_id=request_id, bytes=len(jpeg_bytes),
+                      outcome="queued", **log_fields)
             except Exception as exc:
-                event("crop_publish_failed", lecture_id, request_id=request_id, error_type=type(exc).__name__)
+                event("crop_publish_failed", lecture_id, request_id=request_id,
+                      error_type=type(exc).__name__, **log_fields)
                 raise RuntimeError("crop_publish_failed") from None
             return
 
@@ -202,7 +208,9 @@ class FacePublisher:
         )
         try:
             await self._exchange.publish(msg, routing_key=binding.routing_key)
-            event("crop_published", lecture_id, request_id=request_id, bytes=len(jpeg_bytes), outcome="queued")
+            event("crop_published", lecture_id, request_id=request_id, bytes=len(jpeg_bytes),
+                  outcome="queued", **log_fields)
         except Exception as exc:
-            event("crop_publish_failed", lecture_id, request_id=request_id, error_type=type(exc).__name__)
+            event("crop_publish_failed", lecture_id, request_id=request_id,
+                  error_type=type(exc).__name__, **log_fields)
             raise RuntimeError("crop_publish_failed") from None
